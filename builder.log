@@ -1,0 +1,14 @@
+2023-04-15 00:32:27,695 INFO: Namespace(fulib=False, source_install=True, fish_install=True)
+2023-04-15 00:32:27,695 INFO: LOG DADDy
+2023-04-15 00:33:40,345 INFO: Namespace(fulib=False, source_install=True, fish_install=True)
+2023-04-15 00:33:40,345 INFO: LOG DADDy
+2023-04-15 00:35:18,110 INFO: Namespace(fulib=False, source_install=True, fish_install=True)
+2023-04-15 00:35:18,110 INFO: LOG DADDy
+2023-04-15 00:38:47,809 INFO: Kicking off Install Source Targets
+2023-04-15 00:39:51,939 INFO: Namespace(fulib=False, source_install=True, fish_install=True)
+2023-04-15 00:39:51,939 INFO: LOG DADDy
+2023-04-15 00:43:23,209 INFO: Kicking off Install Source Targets
+2023-04-15 00:45:04,817 INFO: Namespace(fulib=False, source_install=True, fish_install=True)
+2023-04-15 00:45:04,817 INFO: LOG DADDy
+2023-04-15 00:49:30,857 INFO: Namespace(fulib=False, source_install=False, fish_install=False)
+2023-04-15 00:49:56,131 INFO: Namespace(fulib=False, source_install=False, fish_install=False)
