@@ -1,53 +1,32 @@
 #!/usr/bin/env python3
 
-import os
 import pdb
-# import socket
 import sys
 import select
-# import multiprocessing_logging
 import paramiko
-# import datetime
 import logging
-# from logging.handlers import RotatingFileHandler
-# from logging.handlers import QueueHandler
-# from logging.handlers import QueueListener
-# from multiprocessing import Queue
 from logging.handlers import QueueHandler, RotatingFileHandler
 import time
-# import atexit
 import multiprocessing
 import argparse
-# import signal
-# import posix_ipc
-# import resource
-# from multiprocessing_logging import install_mp_handler, MultiProcessingHandler
-# import multiprocessing_logging
 
-# # Set the maximum CPU time (in seconds) that the process can use
-# cpu_time_limit = 5 # For example, 5 seconds
-# resource.setrlimit(resource.RLIMIT_CPU, (cpu_time_limit, cpu_time_limit))
-#
-# # Set the maximum memory (in bytes) that the process can use
-# memory_limit = 100000000000 # For example, 100 MB
-# resource.setrlimit(resource.RLIMIT_DATA, (memory_limit, memory_limit))
-
-SORES_HOST = "opensores.us.oracle.com"
-SORES_USERNAME = "bousborn"
+SORES_HOST = "ofasdf"
+SORES_USERNAME = "asdfasf"
 SORES_BUILD_SOURCE_COMMAND = "pwd && cd usr/src/ && pwd && pwd && build here -Cid && echo $?"
 SORES_BUILD_FISH_COMMAND = "pwd && cd usr/fish/ && pwd && build here -Cid && echo $?"
 SORES_HERE_LOG = "/export/ws/bousborn/on-gate/log.i386/here.log"
 SORES_KNOWN_KEYS = "/home/bousborn/.ssh/authorized_keys"
 
 LOCAL_LOGFILE_LOC = "/Users/bousborn/oracle/"
-AK_RIGS_INFO = [('nori', 'root', 'l1admin1'), ('chutoro', 'root', 'l1admin1')]
+AK_RIGS_INFO = [('nori', 'root', 'pass'), ('chutoro', 'root', 'pass')]
 AK_REBOOT_COMMAND = 'confirm maintenance system reboot'
 AK_PWD_COMMAND = 'confirm shell pwd'
-AK_MOUNT_COMMAND = 'confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/'
+AK_MOUNT_COMMAND = 'fasdf'
 AK_INSTALL_SOURCE_COMMAND = 'confirm shell /tmp/on/sbin/./install.ksh'
 AK_INSTALL_FISH_COMAND = 'confirm shell /usr/lib/ak/tools/fulib /tmp/on'
-
-# LOGGER = None
+AK_TEST_ESTIMATE = 'shares select prj20 replication select action-000 sendestimate'
+AK_TEST_ESTIMATE2 = 'shares select prj20 replication select action-001 sendestimate'
+AK_TEST_ESTIMATE3 = 'shares select prj1 replication select action-002 sendestimate'
 
 class ForkedPdb(pdb.Pdb):
     """A Pdb subclass that may be used
@@ -67,22 +46,6 @@ class ForkedPdb(pdb.Pdb):
         finally:
             sys.stdin = _stdin
 
-
-# class MultiprocessingLogger(logging.Logger):
-#     def __init__(self, name, level=logging.DEBUG):
-#         super().__init__(name, level)
-#         self.queue = Queue()
-#         handler = QueueHandler(self.queue)
-#         self.addHandler(handler)
-#         listener = QueueListener(self.queue, handler)
-#         listener.start()
-#
-#     def stop(self):
-#         for handler in self.handlers:
-#             if isinstance(handler, QueueHandler):
-#                 self.queue.put(None)
-#         self.queue.close()
-#         self.queue.join_thread()
 
 class LogWriterProcess(multiprocessing.Process):
     def __init__(self, logfile_path, log_queue):
@@ -119,76 +82,83 @@ class LogWriterProcess(multiprocessing.Process):
 
 
 class Commands(multiprocessing.Process):
-    def __init__(self, log_queue, retry_time=10):
+    def __init__(self, log_queue=None, log_writer=None, retry_time=10, host=None, username=None, password=None):
         super().__init__()
         self.log_queue = log_queue
         self.retry_time = retry_time
-        self.host = None
+        self.host = host
         self.connected = False
-        self.username = None
-        self.password = None
+        self.username = username
+        self.password = password
         self.cmd_list = None
         self.known_keys = SORES_KNOWN_KEYS
         self.ssh_client = paramiko.SSHClient()
         self.rigs = AK_RIGS_INFO
         self.build_loc = SORES_HOST
-        logging.critical('init')
-        logging.getLogger('log_writer').setLevel(logging.DEBUG)
-        # global LOGGER
+        self.logger = logging.getLogger(f"Commands.{self.host}")
+        self.logger.critical('init')
+        self.logger.info('init')
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.info("INFO init %s", self.host)
+        self.log_writer = log_writer
 
-        # self.handler = logging.NullHandler()
-        # self.logger = logging.Logger("test-logger")
-        # self.logger.addHandler(self.handler)
+    def reset_log(self, queue):
+        self.log_queue = queue
+        self.logger = logging.getLogger(f"Commands.{self.host}")
+        self.logger.setLevel(logging.DEBUG)
 
     def connect(self):
         i = 0
-        logging.getLogger('log_writer')
-        logging.critical("Test")
+        # logging.getLogger('log_writer')
+        # self.logging.critical("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
+        # print(f"logger: {self.logger}, host: {self.host}")
+        # self.logger.info("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
+        # self.logger.critical("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
 
+        print(f"Trying to connect to {self.host} ({i}/{self.retry_time})")
         while True:
-            logging.info("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
+            # self.logger.info("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
             try:
                 self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 self.ssh_client.connect(self.host, username=self.username, password=self.password)
                 self.connected = True
                 break
             except paramiko.AuthenticationException:
-                logging.info("Authentication failed when connecting to %s" % self.host)
+                # self.logger.info("Authentication failed when connecting to %s" % self.host)
                 self.connected = False
                 sys.exit(1)
             except:
-                logging.info("Could not SSH to %s, waiting for it to start" % self.host)
+                # self.logger.info("Could not SSH to %s, waiting for it to start" % self.host)
                 self.connected = False
                 i += 1
                 time.sleep(2)
 
             # If we could not connect within time limit
             if i >= self.retry_time:
-                logging.info("Could not connect to %s. Giving up" % self.host)
+                # self.logger.info("Could not connect to %s. Giving up" % self.host)
                 self.connected = False
                 sys.exit(1)
 
     def run_cmd(self):
-        # ForkedPdb().set_trace()
         # if self.connected is False:
         output = None
         if not self.ssh_client.get_transport():
-            logging.info("No transport available to %s." % self.host)
+            print("No transport available to %s." % self.host)
             self.connect()
         # if self.connected is False:
         if self.ssh_client.get_transport():
             if not self.ssh_client.get_transport().is_active():
-                logging.info("Not connected to %s." % self.host)
+                print("Not connected to %s." % self.host)
                 self.connect()
 
         if not self.ssh_client.get_transport().is_active():
-            logging.info("There is no connection to %s." % self.host)
+            print("There is no connection to %s." % self.host)
         # After connection is successful
         chan = self.ssh_client.get_transport().open_session()
         chan.get_pty()
         for command in self.cmd_list:
             # self.logger.info(self.host, ": ", command)
-            logging.info(f"{self.host}: {command}")
+            print(f"{self.host}: {command}")
             # execute commands
             stdin, stdout, stderr = self.ssh_client.exec_command(command, get_pty=True)
             # TODO() : if an error is thrown, stop further rules and revert back changes
@@ -201,7 +171,8 @@ class Commands(multiprocessing.Process):
                         tmp = stdout.channel.recv(1024)
                         output = tmp.decode()
                         # self.logger.info(self.host, ": ", output)
-                        logging.info(f"{self.host}: {output}")
+                        # logging.info(f"{self.host}: {output}")
+                        print(f"{self.host}: {output}")
                         continue
             time.sleep(3)
         return output
@@ -226,12 +197,17 @@ class Commands(multiprocessing.Process):
                 self.run_cmd()
                 break
             except:
-                logging.info("%s: Waiting for reboot" % self.host)
+                print("%s: Waiting for reboot" % self.host)
         self.retry_time = 10
-        logging.info("%s: Reboot complete" % self.host)
+        print("%s: Reboot complete" % self.host)
 
     def install_source(self):
-        logging.info("%s: Reboot complete" % self.host)
+        print("install source")
+        # self.reset_log(log_queue)
+        print("log reset")
+        self.logger.critical("%s: INSTALL SOURCE" % self.host)
+        print("logged")
+
         self.cmd_list = [AK_MOUNT_COMMAND]
         self.run_cmd()
         self.cmd_list = [AK_INSTALL_SOURCE_COMMAND]
@@ -267,31 +243,36 @@ class Commands(multiprocessing.Process):
         self.host = SORES_HOST
         self.username = SORES_USERNAME
         if not self.ssh_client.get_transport():
-            logging.info("No transport available to %s." % self.host)
+            print("No transport available to %s." % self.host)
             self.connect()
         # if self.connected is False:
         if self.ssh_client.get_transport():
             if not self.ssh_client.get_transport().is_active():
-                logging.info("Not connected to %s." % self.host)
+                print("Not connected to %s." % self.host)
                 self.connect()
         sftp = self.ssh_client.open_sftp()
         with sftp.open(SORES_HERE_LOG, "r") as f:
             contents = f.read()
             decoded_contents = contents.decode()
-            logging.info(decoded_contents)
+            self.logger.info(decoded_contents)
+
+    def rig_test(self):
+        self.cmd_list = [AK_TEST_ESTIMATE, AK_TEST_ESTIMATE2, AK_TEST_ESTIMATE3]
+        self.run_cmd()
 
 
-def get_rigs(log_queue=None):
+def get_rigs():
     processes = []
     # global LOGGER
     # logger = logging.getLogger('log_writer')
     logging.critical("get_rigs2")
-    connection = Commands(log_queue=log_queue)
-    for rig in connection.rigs:
-        connect = Commands(log_queue=log_queue)
-        connect.host = rig[0]
-        connect.username = rig[1]
-        connect.password = rig[2]
+    logging.info("get_rigs2")
+    # connection = Commands(log_queue=log_queue)
+    for rig in AK_RIGS_INFO:
+        connect = Commands(host=rig[0], username=rig[1], password=rig[2])
+        # connect.host = rig[0]
+        # connect.username = rig[1]
+        # connect.password = rig[2]
         processes.append(connect)
 
     return processes
@@ -322,19 +303,21 @@ def run_process(processlist, proc_target):
     # LOGGER.info("Complete!")
 
 
-def install_all_rigs(log_queue=None):
+def install_all_rigs(log_queue=None, log_writer=None):
     # global LOGGER
-    processlist = get_rigs(log_queue=log_queue)
-    # LOGGER.info("Kicking off Install Source Targets")
+    processlist = get_rigs()
+    print("Kicking off Install Source Targets")
     run_process(processlist, Commands.install_source)
-    # LOGGER.info("Kicking off Reboot and Wait Targets")
-    # run_process(processlist, Commands.reboot_rig)
-    # LOGGER.info("Kicking off Reboot and Wait Targets")
-    # run_process(processlist, Commands.wait_for_rig_reboot)
-    # LOGGER.info("Kicking off Install Fulib Targets")
-    # run_process(processlist, Commands.install_fulib)
-    # LOGGER.info("Kicking off Close Clients")
-    # run_process(processlist, Commands.close_client)
+    print("Kicking off Reboot and Wait Targets")
+    run_process(processlist, Commands.reboot_rig)
+    print("Kicking off Reboot and Wait Targets")
+    run_process(processlist, Commands.wait_for_rig_reboot)
+    print("Kicking off Install Fulib Targets")
+    run_process(processlist, Commands.install_fulib)
+    # print("Kicking off Rig Test")
+    # run_process(processlist, Commands.rig_test)
+    print("Kicking off Close Clients")
+    run_process(processlist, Commands.close_client)
 
 
 def create_parser():
@@ -357,124 +340,6 @@ def create_parser():
     return parser
 
 
-# def log_debug(*args):
-#     debug = ' '.join(str(arg) for arg in args)
-#     # global LOGGER
-#     # LOGGER.debug(debug)
-#
-# def log_info(*args):
-#     info = ' '.join(str(arg) for arg in args)
-#     print(info)
-#     # global LOGGER
-#     # LOGGER.info(info)
-#
-# def log_warning(*args):
-#     warning = ' '.join(str(arg) for arg in args)
-#     # global LOGGER
-#     # LOGGER.warning(warning)
-#
-# def log_error(*args):
-#     error = ' '.join(str(arg) for arg in args)
-#     # global LOGGER
-#     # LOGGER.error(error)
-#
-# def log_critical(*args):
-#     critical = ' '.join(str(arg) for arg in args)
-#     # global LOGGER
-#     # LOGGER.critical(critical)
-
-# def create_logger(logfile):
-#     # Create a logger instance
-#     timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-#     logfile_location = "".join([LOCAL_LOGFILE_LOC, logfile, '_', timestamp, '.log'])
-#     logger = logging.getLogger(logfile_location)
-#     logger.setLevel(logging.DEBUG)
-#
-#     # Create a console handler
-#     ch = logging.StreamHandler(sys.stdout)
-#     ch.setLevel(logging.DEBUG)
-#     ch.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-#     logger.addHandler(ch)
-#
-#     # Create a file handler
-#     # fh = logging.FileHandler(logfile)
-#     fh = RotatingFileHandler(logfile, maxBytes=1024, backupCount=3)
-#     fh.setLevel(logging.DEBUG)
-#     fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-#     logger.addHandler(fh)
-#
-#     return logger
-
-
-# def create_logger(logfile):
-#     # Create a logger instance
-#     timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-#     logfile_location = "".join([LOCAL_LOGFILE_LOC, logfile, '_', timestamp, '.log'])
-#     logger = logging.getLogger(logfile_location)
-#     logger.setLevel(logging.DEBUG)
-#
-#     # Create a multiprocessing queue
-#     queue = multiprocessing.Queue()
-#
-#     # Create a QueueHandler instance and set its target queue to the multiprocessing queue
-#     queue_handler = QueueHandler(queue)
-#
-#     # Create a RotatingFileHandler instance and set its formatter
-#     fh = RotatingFileHandler(logfile, maxBytes=1024, backupCount=3)
-#     fh.setLevel(logging.DEBUG)
-#     fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-#
-#     # Create a QueueListener instance and set its handlers to the RotatingFileHandler and QueueHandler instances
-#     queue_listener = QueueListener(queue, fh, queue_handler)
-#     queue_listener.start()
-#
-#     # Add the QueueListener to the root logger
-#     logging.getLogger().addHandler(queue_handler)
-#
-#     # Create a StreamHandler to print logs to console
-#     console_handler = logging.StreamHandler(sys.stdout)
-#     console_handler.setLevel(logging.DEBUG)
-#     console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-#
-#     # Add the StreamHandler to the logger
-#     logger.addHandler(console_handler)
-#
-#     return logger
-
-# def create_logger(logfile):
-#     # def worker(wid):
-#     #     logger = logging.getLogger("child.%d" % (wid,))
-#     #     for i in range(3):
-#     #         logger.critical("Log %d.", i)
-#     # Create a logger instance
-#     timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-#     logfile_location = "".join([LOCAL_LOGFILE_LOC, logfile, '_', timestamp, '.log'])
-#     # logger = MultiProcessingHandler(logfile_location)
-#     logger = logging.getLogger(logfile_location)
-#     logger.setLevel(logging.DEBUG)
-#
-#     # Create a RotatingFileHandler instance and set its formatter
-#     fh = RotatingFileHandler(logfile, maxBytes=1024, backupCount=3)
-#     fh.setLevel(logging.DEBUG)
-#     fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-#
-#     # Add the RotatingFileHandler to the logger
-#     logger.addHandler(fh)
-#
-#     # Create a StreamHandler to print logs to console
-#     console_handler = logging.StreamHandler(sys.stdout)
-#     console_handler.setLevel(logging.DEBUG)
-#     console_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-#
-#     # Add the StreamHandler to the logger
-#     logger.addHandler(console_handler)
-#     return logger
-
-
-
-
-
-
 def create_logger():
     # Create a multiprocessing queue for log messages
     log_queue = multiprocessing.Queue(-1)
@@ -484,6 +349,19 @@ def create_logger():
     logfile_path = 'blastoff.log'
     log_writer = LogWriterProcess(logfile_path, log_queue)
     log_writer.start()
+
+    # Create a file handler for the log file
+    file_handler = RotatingFileHandler(logfile_path, maxBytes=1024, backupCount=3)
+    file_handler.setLevel(logging.DEBUG)
+
+    # Create a formatter for the log messages
+    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+    file_handler.setFormatter(formatter)
+
+    # Create a logger and add the file handler
+    logger = logging.getLogger('log_writer')
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.DEBUG)
 
     # Create a log handler for the queue and add it to the root logger
     queue_handler = logging.handlers.QueueHandler(log_queue)
@@ -507,8 +385,9 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
 
-    if args.fish_install:
-        build_src = Commands()
+    if args.source_install:
+        print("Starting SOURCE\n")
+        build_src = Commands(log_queue=log_queue, log_writer=log_writer)
         # LOGGER.info("LOG DADDy")
         src = build_src.build_source()
         build_src.close_client()
@@ -518,60 +397,23 @@ def main():
             sys.exit(1)
 
     if args.fish_install:
-        build_fish = Commands()
+        print("Starting FISH\n")
+        build_fish = Commands(log_queue=log_queue, log_writer=log_writer)
         fish = build_fish.build_fish()
         build_fish.close_client()
         if fish is False:
             build_fish.print_here_log()
             # LOGGER.info("Build Fish Failed")
             sys.exit(1)
-    print("fuck5")
 
     # Stop the log writer process
 
-    install_all_rigs(log_queue=log_queue)
+    install_all_rigs(log_queue=log_queue, log_writer=log_writer)
     # LOGGER.info("COMPLETED!")
     log_queue.put_nowait(None)
     log_writer.join()
     # return
 
 
-# def sigint_handler(signum, frame):
-#     print("Caught KeyboardInterrupt %d, quitting...", signum)
-#     # clean up code here
-#     # ...
-#     # exit the program
-#     # exit(1)
-#     for p in multiprocessing.active_children():
-#         p.terminate()
-#     sys.exit(1)
-#
-#
-# def sigterm_handler(signum, frame):
-#     print("Caught SIGTERM %d, quitting...", signum)
-#     for p in multiprocessing.active_children():
-#         p.terminate()
-#     sys.exit(1)
-#
-#
-# def release_semaphores():
-#     for semaphore_name in SEMAPHORE_NAMES:
-#         try:
-#             semaphore = posix_ipc.Semaphore(semaphore_name)
-#             semaphore.unlink()
-#         except Exception as e:
-#             print(f"Error releasing semaphore {semaphore_name}: {e}")
-
-
 if __name__ == "__main__":
     main()
-
-    # atexit.register(release_semaphores)
-    # signal.signal(signal.SIGINT, sigint_handler)  # ctrl-C
-    # signal.signal(signal.SIGTERM, sigterm_handler)  # kill command or other signals
-    # # check if the process had an exception
-    # if p.exitcode != 0:
-    #     # do some error handling here
-    #     print("Process had an exception, handle it accordingly")
-    #     signal.signal(signal.SIGTERM, sigterm_handler)
-
