@@ -10,18 +10,18 @@ import time
 import multiprocessing
 import argparse
 
-SORES_HOST = "ofasdf"
-SORES_USERNAME = "asdfasf"
+SORES_HOST = "opensores.us.oracle.com"
+SORES_USERNAME = "bousborn"
 SORES_BUILD_SOURCE_COMMAND = "pwd && cd usr/src/ && pwd && pwd && build here -Cid && echo $?"
 SORES_BUILD_FISH_COMMAND = "pwd && cd usr/fish/ && pwd && build here -Cid && echo $?"
 SORES_HERE_LOG = "/export/ws/bousborn/on-gate/log.i386/here.log"
 SORES_KNOWN_KEYS = "/home/bousborn/.ssh/authorized_keys"
 
 LOCAL_LOGFILE_LOC = "/Users/bousborn/oracle/"
-AK_RIGS_INFO = [('nori', 'root', 'pass'), ('chutoro', 'root', 'pass')]
+AK_RIGS_INFO = [('nori', 'root', 'l1admin1'), ('chutoro', 'root', 'l1admin1')]
 AK_REBOOT_COMMAND = 'confirm maintenance system reboot'
 AK_PWD_COMMAND = 'confirm shell pwd'
-AK_MOUNT_COMMAND = 'fasdf'
+AK_MOUNT_COMMAND = 'confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/'
 AK_INSTALL_SOURCE_COMMAND = 'confirm shell /tmp/on/sbin/./install.ksh'
 AK_INSTALL_FISH_COMAND = 'confirm shell /usr/lib/ak/tools/fulib /tmp/on'
 AK_TEST_ESTIMATE = 'shares select prj20 replication select action-000 sendestimate'
@@ -417,3 +417,121 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# -------------------------------------------------------------------------------------
+import argparse
+import paramiko
+import sys
+import threading
+import time
+from queue import Queue
+
+
+class SSHController:
+    def __init__(self, host, user, key):
+        self.host = host
+        self.user = user
+        self.key = key
+        self.client = paramiko.SSHClient()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    def connect(self):
+        self.client.connect(self.host, username=self.user, key_filename=self.key)
+
+    def run_command(self, command):
+        _, stdout, stderr = self.client.exec_command(command)
+        return stdout.read().decode("utf-8"), stderr.read().decode("utf-8")
+
+    def close(self):
+        self.client.close()
+
+
+def worker(host_queue, user, key, cmd):
+    while not host_queue.empty():
+        host = host_queue.get()
+        try:
+            controller = SSHController(host, user, key)
+            controller.connect()
+            stdout, stderr = controller.run_command(cmd)
+            if stdout:
+                print(f"[{host}] {stdout}")
+            if stderr:
+                print(f"[{host}] {stderr}", file=sys.stderr)
+            controller.close()
+        except Exception as e:
+            print(f"[{host}] {e}", file=sys.stderr)
+        finally:
+            host_queue.task_done()
+
+
+def build_fish():
+    host = SORES_HOST
+    username = SORES_USERNAME
+    cmd_list = [SORES_BUILD_FISH_COMMAND]
+    ret = self.run_cmd()
+    if ret.find("failed") != -1:
+        return False
+    else:
+        return True
+
+
+def build_bash():
+    # Add your build_bash implementation here
+    pass
+
+
+def build_zsh():
+    # Add your build_zsh implementation here
+    pass
+
+
+def threader(hosts, user, key, cmd, workers):
+    host_queue = Queue()
+    for host in hosts:
+        host_queue.put(host)
+
+    threads = []
+    for _ in range(workers):
+        t = threading.Thread(target=worker, args=(host_queue, user, key, cmd))
+        t.start()
+        threads.append(t)
+
+    host_queue.join()
+
+    for thread in threads:
+        thread.join()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Execute commands on remote servers over SSH.")
+    parser.add_argument("hosts", metavar="HOST", nargs="+", help="A list of hosts to connect to")
+    parser.add_argument("-u", "--user", required=True, help="Username for the SSH connection")
+    parser.add_argument("-k", "--key", required=True, help="SSH private key file")
+    parser.add_argument("-c", "--cmd", required=True, help="Command to run on the remote server")
+    parser.add_argument("-w", "--workers", type=int, default=5, help="Number of worker threads to use (default: 5)")
+
+    args = parser.parse_args()
+
+    # Define your global variables here
+    global_variable1 = None
+    global_variable2 = None
+    SORES_HOST = "opensores.us.oracle.com"
+    SORES_USERNAME = "bousborn"
+    SORES_BUILD_SOURCE_COMMAND = "pwd && cd usr/src/ && pwd && pwd && build here -Cid && echo $?"
+    SORES_BUILD_FISH_COMMAND = "pwd && cd usr/fish/ && pwd && build here -Cid && echo $?"
+    SORES_HERE_LOG = "/export/ws/bousborn/on-gate/log.i386/here.log"
+    SORES_KNOWN_KEYS = "/home/bousborn/.ssh/authorized_keys"
+
+    LOCAL_LOGFILE_LOC = "/Users/bousborn/oracle/"
+    AK_RIGS_INFO = [('nori', 'root', 'l1admin1'), ('chutoro', 'root', 'l1admin1')]
+    AK_REBOOT_COMMAND = 'confirm maintenance system reboot'
+    AK_PWD_COMMAND = 'confirm shell pwd'
+    AK_MOUNT_COMMAND = 'confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/'
+    AK_INSTALL_SOURCE_COMMAND = 'confirm shell /tmp/on/sbin/./install.ksh'
+    AK_INSTALL_FISH_COMAND = 'confirm shell /usr/lib/ak/tools/fulib /tmp/on'
+    AK_TEST_ESTIMATE = 'shares select prj20 replication select action-000 sendestimate'
+    AK_TEST_ESTIMATE2 = 'shares select prj20 replication select action-001 sendestimate'
+    AK_TEST_ESTIMATE3 = 'shares select prj1 replication select action-002 sendestimate'
+
+    threader(args.hosts, args.user, args.key, args.cmd, args.workers)
+
