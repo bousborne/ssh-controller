@@ -67,66 +67,65 @@ class Commands():
                 sys.exit(1)
 
     def run_cmd(self):
-        # if self.connected is False:
+        logging.info(f"run command on {self.host}.")
         output = None
-        if not self.ssh_client.get_transport():
-            logging.info("No transport available to %s." % self.host)
-            self.connect()
-        # if self.connected is False:
-        if self.ssh_client.get_transport():
-            if not self.ssh_client.get_transport().is_active():
-                logging.info("Not connected to %s." % self.host)
-                self.connect()
 
-        if not self.ssh_client.get_transport().is_active():
-            logging.info("There is no connection to %s." % self.host)
-        # After connection is successful
-        chan = self.ssh_client.get_transport().open_session()
-        chan.get_pty()
+        if not self.ensure_connection():
+            logging.error(f"There is no connection to {self.host}.")
+            return output
+
         for command in self.cmd_list:
-            # self.logger.info(self.host, ": ", command)
             logging.info(f"{self.host}: {command}")
-            # execute commands
             stdin, stdout, stderr = self.ssh_client.exec_command(command, get_pty=True)
-            # TODO() : if an error is thrown, stop further rules and revert back changes
-            # Wait for the command to terminate
             while not stdout.channel.exit_status_ready():
-                # Only print data if there is data to read in the channel
                 if stdout.channel.recv_ready():
                     rl, wl, xl = select.select([stdout.channel], [], [], 0.0)
                     if len(rl) > 0:
                         tmp = stdout.channel.recv(1024)
                         output = tmp.decode()
-                        # self.logger.info(self.host, ": ", output)
-                        # logging.info(f"{self.host}: {output}")
                         logging.info(f"{self.host}: {output}")
-                        continue
+
             time.sleep(3)
         return output
+
+    def ensure_connection(self):
+        logging.info(f"ensure connection to {self.host}.")
+        if not self.ssh_client.get_transport() or not self.ssh_client.get_transport().is_active():
+            logging.info(f"No active transport available to {self.host}. Trying to connect...")
+            self.connect()
+
+        return self.ssh_client.get_transport() and self.ssh_client.get_transport().is_active()
 
     def close_client(self):
         self.ssh_client.close()
         self.connected = False
 
     def reboot_rig(self):
+        logging.info(f"Rebooting {self.host}.")
         reboot_command = AK_REBOOT_COMMAND
         self.cmd_list = [reboot_command]
         self.run_cmd()
 
-    def wait_for_rig_reboot(self):
+    def wait_for_rig_reboot(self, timeout=600, retry_interval=15):
+        logging.info(f"Waiting for reboot on {self.host}.")
+        reboot_start_time = time.time()
+        # Required for time to initiate reboot
         time.sleep(60)
-        self.retry_time = 0
         while True:
+            time_elapsed = time.time() - reboot_start_time
+            if time_elapsed >= timeout:
+                logging.warning(f"{self.host}: Reboot timeout reached. Aborting.")
+                break
             try:
-                time.sleep(15)
+                time.sleep(retry_interval)
+                logging.info(f"Attempting to connect to {self.host}.")
                 pwd_command = AK_PWD_COMMAND
                 self.cmd_list = [pwd_command]
                 self.run_cmd()
+                logging.info(f"{self.host}: Reboot complete")
                 break
-            except:
-                logging.info("%s: Waiting for reboot" % self.host)
-        self.retry_time = 10
-        logging.info("%s: Reboot complete" % self.host)
+            except Exception as e:
+                logging.info(f"{self.host}: Waiting for reboot. Exception: {e}")
 
     def install_source(self):
         logging.info("%s: INSTALL SOURCE" % self.host)
