@@ -141,6 +141,52 @@ class Commands():
         self.cmd_list = [AK_INSTALL_FISH_COMAND]
         self.run_cmd()
 
+    def install_fuweb(self):
+        logging.info("%s: INSTALL FUWEB" % self.host)
+        self.cmd_list = [AK_MOUNT_COMMAND]
+        self.run_cmd()
+        self.cmd_list = [AK_INSTALL_FUWEB_COMAND]
+        self.run_cmd()
+        self.cmd_list = [AK_INSTALL_RESTART_SVCADM_COMAND]
+        self.run_cmd()
+
+    def create_install_file(self):
+        logging.info("%s: BUILD SOURCE" % self.host)
+        self.host = SORES_HOST
+        self.username = SORES_USERNAME
+        sftp = self.ssh_client.open_sftp()
+        try:
+            sftp.stat(KERNEL_INSTALL_PATH)
+        except FileNotFoundError:
+            sftp.mkdir(KERNEL_INSTALL_PATH)
+
+        # Create the file on the remote machine
+        remote_filename = f"{KERNEL_INSTALL_PATH}/{KERNEL_INSTALL_FILE}"
+        remote_file = sftp.file(remote_filename, 'w')
+        remote_file.write(KERNEL_INSTALL_CONTENT)
+        remote_file.close()
+
+        # Make the file executable
+        stdin, stdout, stderr = self.ssh_client.exec_command(f"chmod +x {KERNEL_INSTALL_PATH}/{KERNEL_INSTALL_FILE}")
+        sftp.close()
+
+    def remove_install_file(self):
+        logging.info("%s: BUILD SOURCE" % self.host)
+        self.host = SORES_HOST
+        self.username = SORES_USERNAME
+        sftp = self.ssh_client.open_sftp()
+        remote_filename = f"{KERNEL_INSTALL_PATH}/{KERNEL_INSTALL_FILE}"
+        try:
+            sftp.stat(remote_filename)
+            # File exists, so remove it
+            sftp.remove(remote_filename)
+            print("File removed successfully.")
+        except FileNotFoundError:
+            # File does not exist
+            print("File does not exist.")
+
+        sftp.close()
+
     def build_source(self):
         logging.info("%s: BUILD SOURCE" % self.host)
         self.host = SORES_HOST
@@ -311,6 +357,8 @@ def create_parser():
         help='skip source compile')
     parser.add_argument('-sf', '--skip_fish', action='store_true',
         help='skip fish compile')
+    parser.add_argument('-f', '--fuweb', action='store_true',
+        help='skip fish compile')
     return parser
 
 
@@ -333,6 +381,8 @@ def main():
         logging.info("main: building source")
         run_process(sores, Commands.build_source)
         logging.info("main: completed build source")
+        run_process(sores, Commands.create_install_file)
+        logging.info("main: completed create source install file")
 
 
     if not args.skip_fish:
@@ -352,6 +402,8 @@ def main():
         logging.info("main: waiting for rigs to reboot")
         run_process(rigs, Commands.wait_for_rig_reboot)
         logging.info("main: completed install source and reboot")
+        run_process(rigs, Commands.remove_install_file)
+        logging.info("main: removed source install file")
 
 
     if not args.skip_fish:
@@ -359,6 +411,11 @@ def main():
         logging.info("main: installing fish")
         run_process(rigs, Commands.install_fulib)
         logging.info("main: completed install fish")
+
+    if args.fuweb:
+        logging.info("main: installing fuweb")
+        run_process(rigs, Commands.install_fuweb)
+        logging.info("main: completed install fuweb")
 
     logging.info("main: completed all")
 
@@ -380,9 +437,60 @@ if __name__ == "__main__":
     AK_REBOOT_COMMAND = 'confirm maintenance system reboot'
     AK_PWD_COMMAND = 'confirm shell pwd'
     AK_MOUNT_COMMAND = 'confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/'
+    KERNEL_INSTALL_PATH = "/export/ws/bousborn/on-gate/sbin"
+    KERNEL_INSTALL_FILE = "install.ksh"
     AK_INSTALL_SOURCE_COMMAND = 'confirm shell /tmp/on/sbin/./install.ksh'
     AK_INSTALL_FISH_COMAND = 'confirm shell /usr/lib/ak/tools/fulib /tmp/on'
+    AK_INSTALL_FUWEB_COMAND = 'confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386'
+    AK_INSTALL_RESTART_SVCADM_COMAND = 'confirm shell svcadm restart -s akd'
+
     AK_TEST_ESTIMATE = 'shares select prj20 replication select action-000 sendestimate'
     AK_TEST_ESTIMATE2 = 'shares select prj20 replication select action-001 sendestimate'
     AK_TEST_ESTIMATE3 = 'shares select prj1 replication select action-002 sendestimate'
+
+    KERNEL_INSTALL_CONTENT = """ROOT=
+BASE=/tmp/on
+FBASE=$BASE
+BLD=$BASE/data/build.i386/usr/src
+FBLD=$FBASE/data/build.i386/usr/fish
+AK=/usr/lib/ak
+ 
+PYTHONDIRVP=python3.7
+ 
+svcadm disable repld
+svcadm disable -s akd
+ 
+mount -o rw,remount /
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/drv/amd64/
+cp $BLD/lib/libzfs/amd64/libzfs.so.1  $ROOT/lib/amd64/libzfs.so.1
+cp $BLD/cmd/zfs/zfs                   $ROOT/usr/sbin/zfs
+cp $BLD/cmd/ztest/amd64/ztest         $ROOT/usr/bin/ztest
+ 
+cp $FBLD/lib/ak/libak/amd64/libak.so.1           $ROOT/$AK/amd64/libak.so.1
+cp $FBLD/lib/ak/librepl/amd64/librepl.so.1       $ROOT/$AK/amd64/librepl.so.1
+cp $FBLD/appliance/nas/modules/core/amd64/nas.so $ROOT/$AK/modules/appliance/nas/amd64/nas.so
+mount -o ro,remount /
+ 
+echo "copied
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/drv/amd64/
+cp $BLD/lib/libzfs/amd64/libzfs.so.1  $ROOT/lib/amd64/libzfs.so.1
+cp $BLD/cmd/zfs/zfs                   $ROOT/usr/sbin/zfs
+cp $BLD/cmd/ztest/amd64/ztest         $ROOT/usr/bin/ztest
+ 
+cp $FBLD/lib/ak/libak/amd64/libak.so.1           $ROOT/$AK/amd64/libak.so.1
+cp $FBLD/lib/ak/librepl/amd64/librepl.so.1       $ROOT/$AK/amd64/librepl.so.1
+cp $FBLD/appliance/nas/modules/core/amd64/nas.so $ROOT/$AK/modules/appliance/nas/amd64/nas.so
+"
+ 
+echo "Setting mountpoints... \c";
+zfs set mountpoint=none system
+bootadm update-archive
+zfs set mountpoint=legacy system
+ 
+echo "Restarting services... \c";
+svcadm enable -s akd
+svcadm enable repld
+echo "Installation Complete. If kernel was installed, please restart machine...";"""
     main()
