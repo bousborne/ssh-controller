@@ -13,6 +13,8 @@ import argparse
 import sys
 import threading
 import time
+import subprocess
+
 from queue import Queue
 
 logging.basicConfig(
@@ -154,7 +156,18 @@ class Commands():
         logging.info("%s: BUILD SOURCE" % self.host)
         self.host = SORES_HOST
         self.username = SORES_USERNAME
-        sftp = self.ssh_client.open_sftp()
+        try:
+            sftp = self.ssh_client.open_sftp()
+        except paramiko.ssh_exception.SSHException as e:
+            # Handle SSHException, such as re-establishing SSH connection
+            print("SSHException occurred:", str(e))
+            time.sleep(5)  # Wait for a few seconds before retrying
+            # ssh_client = establish_ssh_connection(hostname, username, password)
+            # perform_sftp_operations(ssh_client)
+            self.connect()
+            self.ensure_connection()
+            sftp = self.ssh_client.open_sftp()
+
         try:
             sftp.stat(KERNEL_INSTALL_PATH)
         except FileNotFoundError:
@@ -174,7 +187,19 @@ class Commands():
         logging.info("%s: BUILD SOURCE" % self.host)
         self.host = SORES_HOST
         self.username = SORES_USERNAME
-        sftp = self.ssh_client.open_sftp()
+        # sftp = self.ssh_client.open_sftp()
+        try:
+            sftp = self.ssh_client.open_sftp()
+        except paramiko.ssh_exception.SSHException as e:
+            # Handle SSHException, such as re-establishing SSH connection
+            print("SSHException occurred:", str(e))
+            time.sleep(5)  # Wait for a few seconds before retrying
+            # ssh_client = establish_ssh_connection(hostname, username, password)
+            # perform_sftp_operations(ssh_client)
+            self.connect()
+            self.ensure_connection()
+            sftp = self.ssh_client.open_sftp()
+
         remote_filename = f"{KERNEL_INSTALL_PATH}/{KERNEL_INSTALL_FILE}"
         try:
             sftp.stat(remote_filename)
@@ -193,9 +218,14 @@ class Commands():
         self.username = SORES_USERNAME
         self.cmd_list = [SORES_BUILD_SOURCE_COMMAND]
         ret = self.run_cmd()
+        print(f"build source ret: {ret}")
         if ret.find("failed") != -1:
+            print(f"build SOURCE ret false and print")
+            self.print_here_log_errors()
+            print(f"build SOURCE ret false")
             return False
         else:
+            print(f"build SOURCE ret true")
             return True
 
     def build_fish(self):
@@ -204,14 +234,20 @@ class Commands():
         self.username = SORES_USERNAME
         self.cmd_list = [SORES_BUILD_FISH_COMMAND]
         ret = self.run_cmd()
+        print(f"build FISH ret: {ret}")
         if ret.find("failed") != -1:
+            print(f"build FISH ret false and print")
+            self.print_here_log_errors()
+            print(f"build FISH ret false")
             return False
         else:
+            print(f"build FISH ret true")
             return True
 
-    def print_here_log(self):
+    def print_here_log_errors(self):
         self.host = SORES_HOST
         self.username = SORES_USERNAME
+        print(f"printing log errors!")
         if not self.ssh_client.get_transport():
             print("No transport available to %s." % self.host)
             self.connect()
@@ -224,7 +260,12 @@ class Commands():
         with sftp.open(SORES_HERE_LOG, "r") as f:
             contents = f.read()
             decoded_contents = contents.decode()
-            self.logger.info(decoded_contents)
+            command = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exit}}']
+            result = subprocess.run(command, input=decoded_contents, check=True, stdout=subprocess.PIPE,
+                universal_newlines=True)
+            print(f"printi log results!")
+            print(result.stdout)
+            print(f"done print")
 
     def rig_test(self):
         self.cmd_list = [AK_TEST_ESTIMATE, AK_TEST_ESTIMATE2, AK_TEST_ESTIMATE3]
@@ -333,15 +374,15 @@ def worker(host_queue, user, key, cmd):
             host_queue.task_done()
 
 
-def run_process(processlist, proc_target):
-    threads = []
-    for item in processlist:
-        t = threading.Thread(target=proc_target, args=(item,))
-        t.start()
-        threads.append(t)
+from concurrent.futures import ThreadPoolExecutor
 
-    for thread in threads:
-        thread.join()
+def run_process(instances, method):
+    with ThreadPoolExecutor() as executor:
+        # The map function applies the method to every instance and
+        # waits for the function to complete, then it returns the results
+        # as an iterable.
+        results = executor.map(method, instances)
+    return list(results)
 
 
 def create_parser():
@@ -379,16 +420,26 @@ def main():
     if not args.skip_src:
         logging.info("main: did NOT skip build src")
         logging.info("main: building source")
-        run_process(sores, Commands.build_source)
-        logging.info("main: completed build source")
-        run_process(sores, Commands.create_install_file)
-        logging.info("main: completed create source install file")
+        build_results = run_process(sores, Commands.build_source)
+        build_result = build_results[0]
+        print(f"build SOURCE result: {build_result}")
+        if build_result:
+            logging.info("main: completed build source")
+            run_process(sores, Commands.create_install_file)
+            logging.info("main: completed create source install file")
+        else:
+            logging.error("main: failed to build source")
+            sys.exit(1)
 
 
     if not args.skip_fish:
         logging.info("main: did NOT skip build fish")
         logging.info("main: building fish")
-        run_process(sores, Commands.build_fish)
+        build_results = run_process(sores, Commands.build_fish)
+        build_result = build_results[0]
+        if not build_result:
+            logging.info("main: Failed build source")
+            sys.exit(1)
         logging.info("main: completed build fish")
 
 
@@ -430,6 +481,7 @@ if __name__ == "__main__":
     SORES_BUILD_SOURCE_COMMAND = "pwd && cd usr/src/ && pwd && pwd && build here -Cid && echo $?"
     SORES_BUILD_FISH_COMMAND = "pwd && cd usr/fish/ && pwd && build here -Cid && echo $?"
     SORES_HERE_LOG = "/export/ws/bousborn/on-gate/log.i386/here.log"
+    SORES_SHOW_LOG = '''awk '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exit}}' here.log'''
     SORES_KNOWN_KEYS = "/home/bousborn/.ssh/authorized_keys"
 
     LOCAL_LOGFILE_LOC = "/Users/bousborn/oracle/"
