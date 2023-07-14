@@ -108,26 +108,37 @@ class Commands():
         self.cmd_list = [reboot_command]
         self.run_cmd()
 
-    def wait_for_rig_reboot(self, timeout=600, retry_interval=15):
-        logging.info(f"Waiting for reboot on {self.host}.")
+    import time
+    import paramiko
+
+    def wait_for_rig_reboot(self, timeout=600, retry_interval=30, max_retries=5, log_callback=None):
+        if log_callback is None:
+            log_callback = logging.info
+
+        log_callback(f"Waiting for reboot on {self.host}.")
         reboot_start_time = time.time()
         # Required for time to initiate reboot
         time.sleep(60)
-        while True:
+        retries = 0
+        while retries < max_retries:
             time_elapsed = time.time() - reboot_start_time
             if time_elapsed >= timeout:
-                logging.warning(f"{self.host}: Reboot timeout reached. Aborting.")
+                log_callback(f"{self.host}: Reboot timeout reached. Aborting.")
                 break
             try:
                 time.sleep(retry_interval)
-                logging.info(f"Attempting to connect to {self.host}.")
+                log_callback(f"Attempting to connect to {self.host}.")
                 pwd_command = AK_PWD_COMMAND
                 self.cmd_list = [pwd_command]
                 self.run_cmd()
-                logging.info(f"{self.host}: Reboot complete")
+                log_callback(f"{self.host}: Reboot complete.")
                 break
-            except Exception as e:
-                logging.info(f"{self.host}: Waiting for reboot. Exception: {e}")
+            except (paramiko.SSHException, paramiko.AuthenticationException) as e:
+                retries += 1
+                log_callback(f"{self.host}: Waiting for reboot. Exception: {str(e)}. Retrying...")
+        else:
+            log_callback(f"{self.host}: Maximum retries reached. Aborting.")
+
 
     def install_source(self):
         logging.info("%s: INSTALL SOURCE" % self.host)
@@ -153,7 +164,7 @@ class Commands():
         self.run_cmd()
 
     def create_install_file(self):
-        logging.info("%s: BUILD SOURCE" % self.host)
+        logging.info("%s: CREATE INSTALL FILE" % self.host)
         self.host = SORES_HOST
         self.username = SORES_USERNAME
         try:
@@ -184,7 +195,7 @@ class Commands():
         sftp.close()
 
     def remove_install_file(self):
-        logging.info("%s: BUILD SOURCE" % self.host)
+        logging.info("%s: REMOVE INSTALL FILE" % self.host)
         self.host = SORES_HOST
         self.username = SORES_USERNAME
         # sftp = self.ssh_client.open_sftp()
@@ -408,7 +419,6 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
 
-    AK_RIGS_INFO = [('nori', 'root', 'l1admin1'), ('chutoro', 'root', 'l1admin1')]
     rigs = []
     for rig in AK_RIGS_INFO:
         commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
