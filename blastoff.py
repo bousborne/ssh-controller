@@ -5,13 +5,15 @@ import sys
 import select
 import paramiko
 import logging
-from logging.handlers import QueueHandler, RotatingFileHandler
 import time
-import multiprocessing
 import argparse
 import subprocess
+import hashlib
+from cryptography.fernet import Fernet
+import getpass
+import os
+import pickle
 
-from queue import Queue
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,8 +23,76 @@ logging.basicConfig(
         logging.StreamHandler()
     ])
 
+USER_DATA_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "user_data.pkl")
+KEY_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "key.key")
+
+def write_key():
+    """
+    Generates a key and save it into a file
+    """
+    if not os.path.exists(KEY_FILE):
+        key = Fernet.generate_key()
+        with open(KEY_FILE, "wb") as key_file:
+            key_file.write(key)
+
+
+def load_key():
+    """
+    Loads the key named `key.key`
+    """
+    return open(KEY_FILE, "rb").read()
+
+
+def setup_user_data(cipher_suite):
+    rigs = {}
+
+    while True:
+        name = input("Enter name (or 'done' to finish): ")
+        if name.lower() == 'done':
+            break
+        ip_address = input("Enter IP address: ")
+        username = input("Enter username: ")
+        password = getpass.getpass("Enter password: ")
+        encrypted_password = cipher_suite.encrypt(password.encode())
+        rigs[name] = (ip_address, username, encrypted_password)
+
+    host = input("Enter build host address (ex: opensores.us.oracle.com): ")
+    username = input("Enter username for build host: ")
+
+    user_data = {'rigs': rigs, 'host': host, 'username': username}
+
+    with open(USER_DATA_FILE, "wb") as f:
+        pickle.dump(user_data, f)
+
+    print("Data saved.")
+    return user_data
+
+
+def use_user_data(cipher_suite):
+    try:
+        with open(USER_DATA_FILE, "rb") as f:
+            user_data = pickle.load(f)
+    except (FileNotFoundError, IOError):
+        print("Error: User data file not found.")
+        return
+
+    loaded_rigs_dict = user_data['rigs']
+
+    rigs = {}
+    for name, data in loaded_rigs_dict.items():
+        ip_address, username, encrypted_password = data
+        decrypted_password = cipher_suite.decrypt(encrypted_password).decode()
+        print(
+            f"Access granted for {name} with IP Address: {ip_address}, Username: {username}, and Password: {decrypted_password}")
+        rigs[name] = (ip_address, username, decrypted_password)
+
+    user_data['rigs'] = rigs
+
+    return user_data
+
+
 class Commands:
-    def __init__(self, retry_time=10, host=None, username=None, password=None):
+    def __init__(self, retry_time=20, host=None, username=None, password=None):
         self.retry_time = retry_time
         self.host = host
         self.connected = False
@@ -32,31 +102,38 @@ class Commands:
         self.ssh_client = paramiko.SSHClient()
         self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+    def save(self):
+        with open('data.pkl', 'wb') as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls):
+        with open('data.pkl', 'rb') as f:
+            return pickle.load(f)
+
     def connect(self):
-        i = 0
-        logging.info("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
-        print(f"Trying to connect to {self.host} ({i}/{self.retry_time})")
-        while True:
-            logging.info("Trying to connect to %s (%i/%i)", self.host, i, self.retry_time)
+        for i in range(self.retry_time):
+            logging.info("Trying to connect to %s (%i/%i) with %s", self.host, i + 1, self.retry_time, self.password)
+            print(f"Trying to connect to {self.host} ({i + 1}/{self.retry_time})")
+
             try:
                 self.ssh_client.connect(self.host, username=self.username, password=self.password)
                 self.connected = True
                 break
             except paramiko.AuthenticationException:
-                logging.info("Authentication failed when connecting to %s" % self.host)
+                logging.error("Authentication failed when connecting to %s with %s" % self.host, self.password)
                 self.connected = False
-                sys.exit(1)
-            except:
-                logging.info("Could not SSH to %s, waiting for it to start" % self.host)
+                # sys.exit(1)
+            except Exception as e:
+                logging.error("Could not SSH to %s, waiting for it to start" % self.host)
+                logging.error(f"Encountered the following error: {e}")
                 self.connected = False
-                i += 1
-                time.sleep(2)
+                time.sleep(2 ** i)  # Exponential backoff
 
-            # If we could not connect within time limit
-            if i >= self.retry_time:
-                logging.info("Could not connect to %s. Giving up" % self.host)
-                self.connected = False
-                sys.exit(1)
+        if not self.connected:
+            logging.error("Could not connect to %s. Giving up" % self.host)
+            sys.exit(1)
+
 
     def run_cmd(self):
         logging.info(f"Run command on {self.host}.")
@@ -98,7 +175,7 @@ class Commands:
         self.cmd_list = [reboot_command]
         self.run_cmd()
 
-    def wait_for_rig_reboot(self, timeout=600, retry_interval=30, max_retries=5, log_callback=None):
+    def wait_for_rig_reboot(self, timeout=600, retry_interval=45, max_retries=20, log_callback=None):
         if log_callback is None:
             log_callback = logging.info
 
@@ -127,6 +204,8 @@ class Commands:
 
     def install_source(self):
         logging.info("%s: INSTALL SOURCE" % self.host)
+        logging.info("%s: INSTALL SOURCE pass" % self.password)
+
         self.cmd_list = ["confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"]
         self.run_cmd()
         self.cmd_list = ["confirm shell /tmp/on/sbin/./install.ksh"]
@@ -143,10 +222,14 @@ class Commands:
         logging.info("%s: INSTALL FUWEB" % self.host)
         self.cmd_list = ["confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"]
         self.run_cmd()
+        # if fast:
+        #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"]
+        # else:
+        #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"]
         self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"]
         self.run_cmd()
-        self.cmd_list = ["confirm shell svcadm restart -s akd"]
-        self.run_cmd()
+        # self.cmd_list = ["confirm shell svcadm restart -s akd"]
+        # self.run_cmd()
 
     def create_install_file(self):
         logging.info("%s: CREATE INSTALL FILE" % self.host)
@@ -278,6 +361,15 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
             print(f"build FISH ret true")
             return True
 
+    def install_headers(self):
+        logging.info("%s: INSTALL HEADERS" % self.host)
+        self.cmd_list = ["pwd && cd usr/src/ && build -iP make sgsheaders"]
+        ret = self.run_cmd()
+        # self.cmd_list = ["pwd && cd usr/src/ && make install_h"]
+        # ret = self.run_cmd()
+        print(f"install headers ret: {ret}")
+
+
     def print_here_log_errors(self):
         # self.host = "opensores.us.oracle.com"
         # self.username = "bousborn"
@@ -309,97 +401,6 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
         self.run_cmd()
 
 
-# class SSHController:
-#     def __init__(self, host, user, key, retry_time=10):
-#         self.host = host
-#         self.user = user
-#         self.key = key
-#         self.retry_time = retry_time
-#         self.ssh_client = paramiko.SSHClient()
-#         self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#
-#     def connect(self):
-#         i = 0
-#         print(f"SSHController Trying to connect to {self.host} ({i}/{self.retry_time})")
-#         while True:
-#             try:
-#                 self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-#                 self.ssh_client.connect(self.host, username=self.user, key_filename=self.key)
-#                 self.connected = True
-#                 break
-#             except paramiko.AuthenticationException:
-#                 self.connected = False
-#                 sys.exit(1)
-#             except:
-#                 self.connected = False
-#                 i += 1
-#                 time.sleep(2)
-#
-#             if i >= self.retry_time:
-#                 self.connected = False
-#                 sys.exit(1)
-#
-#     def run_cmd(self):
-#         output = None
-#         if not self.ssh_client.get_transport():
-#             print("No transport available to %s." % self.host)
-#             self.connect()
-#         if self.ssh_client.get_transport():
-#             if not self.ssh_client.get_transport().is_active():
-#                 print("Not connected to %s." % self.host)
-#                 self.connect()
-#
-#         if not self.ssh_client.get_transport().is_active():
-#             print("There is no connection to %s." % self.host)
-#
-#         chan = self.ssh_client.get_transport().open_session()
-#         chan.get_pty()
-#
-#         for command in self.cmd_list:
-#             print(f"SSHController {self.host}: {command}")
-#             stdin, stdout, stderr = self.ssh_client.exec_command(command, get_pty=True)
-#
-#             while not stdout.channel.exit_status_ready():
-#                 if stdout.channel.recv_ready():
-#                     rl, wl, xl = select.select([stdout.channel], [], [], 0.0)
-#                     if len(rl) > 0:
-#                         tmp = stdout.channel.recv(1024)
-#                         output = tmp.decode()
-#                         print(f"{self.host}: {output}")
-#                         continue
-#
-#             time.sleep(3)
-#         return output
-#
-#     def close_client(self):
-#         self.ssh_client.close()
-#         self.connected = False
-
-
-# def worker(host_queue, user, key, cmd):
-#     text = "IN THE WORKER"
-#     print('\n')
-#     print('*' * (len(text) + 4))
-#     print('* ' + text + ' *')
-#     print('*' * (len(text) + 4))
-#     print('\n')
-#     while not host_queue.empty():
-#         host = host_queue.get()
-#         try:
-#             controller = SSHController(host, user, key)
-#             controller.connect()
-#             stdout, stderr = controller.run_cmd()
-#             if stdout:
-#                 print(f"[{host}] {stdout}")
-#             if stderr:
-#                 print(f"[{host}] {stderr}", file=sys.stderr)
-#             controller.close()
-#         except Exception as e:
-#             print(f"[{host}] {e}", file=sys.stderr)
-#         finally:
-#             host_queue.task_done()
-
-
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -414,14 +415,19 @@ def create_parser():
            'as well as installing it on developer rigs.'
     parser = argparse.ArgumentParser(description=desc,
                                      epilog='run "blastoff --setup" to set it up for the first time.')
-    parser.add_argument('-u', '--fulib', action='store_true',
-                        help='enable fulib compile and install')
+    # parser.add_argument('-u', '--fulib', action='store_true',
+    #                     help='enable fulib compile and install')
     parser.add_argument('-ss', '--skip_src', action='store_true',
                         help='skip source compile')
     parser.add_argument('-sf', '--skip_fish', action='store_true',
                         help='skip fish compile')
     parser.add_argument('-f', '--fuweb', action='store_true',
-                        help='skip fish compile')
+                        help='do fuweb install')
+    parser.add_argument('--fast', action='store_true', help='do fuweb install quickly')
+    parser.add_argument('-r', '--rig', action='store', type=str, help='store a value for rig')
+    parser.add_argument('-hs', '--headers', action='store_true', help='install headers')
+    parser.add_argument("--setup", help="Set to True to setup user data", action='store_true')
+
     return parser
 
 
@@ -432,20 +438,58 @@ def banner(text):
     print('*' * (len(text) + 4))
     print('\n')
 
+write_key()
+key = load_key()
+cipher_suite = Fernet(key)
+
 def main():
     parser = create_parser()
     args = parser.parse_args()
 
+    banner("Pickle Setup")
+
+
+    parser = create_parser()
+    args = parser.parse_args()
+
+    banner("Pickle Setup")
+    if args.setup:
+        user_data = setup_user_data(cipher_suite)
+    user_data = use_user_data(cipher_suite)
+
     banner("Setup Rigs")
+    # rigs_dict = {
+    #     "nori": ("nori", "root", "l1admin1"),
+    #     "chutoro": ("chutoro", "root", "l1admin1")
+    # }
+
+    for rig_name in user_data['rigs']:
+        print(rig_name)
+    rigs_dict = user_data['rigs']
+    # You can also access the 'host' and 'username' data like this:
+    print("Host:", user_data['host'])
+    print("Username:", user_data['username'])
+
     rigs = []
-    for rig in [("nori", "root", "l1admin1"), ("chutoro", "root", "l1admin1")]:
-        commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
-        rigs.append(commands_instance)
+    if args.rig:
+        if args.rig in rigs_dict:
+            rig = rigs_dict[args.rig]
+            commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
+            rigs.append(commands_instance)
+    else:
+        for rig in rigs_dict.values():
+            commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
+            rigs.append(commands_instance)
 
     banner("Setup Sores Instance")
     sores = []
-    sores_instance = Commands(host="opensores.us.oracle.com", username="bousborn")
+    sores_instance = Commands(host=user_data['host'], username=user_data['username'])
     sores.append(sores_instance)
+
+    if args.headers:
+        banner("Install Headers")
+        headers_results = run_process(sores, Commands.install_headers)
+        headers_results = headers_results[0]
 
     if not args.skip_src:
         banner("Build Source")
@@ -474,6 +518,7 @@ def main():
             sys.exit(1)
         print("main: completed build fish")
 
+
     if not args.skip_src:
         banner("Install Source")
         print("main: did NOT skip install src")
@@ -481,7 +526,7 @@ def main():
         run_process(rigs, Commands.install_source)
         print("main: completed install source")
 
-    if not args.fulib:
+    if not args.skip_fish:
         banner("Install fulib")
         print("main: enable fulib compile and install")
         run_process(rigs, Commands.install_fulib)
@@ -493,8 +538,9 @@ def main():
         run_process(rigs, Commands.install_fuweb)
         print("main: completed fuweb install")
 
-    banner("Remove Install File")
-    run_process(sores, Commands.remove_install_file)
+    if not args.skip_src:
+        banner("Remove Install File")
+        run_process(sores, Commands.remove_install_file)
 
     # banner("Delete Sores Instance")
     # # Make sure I don't run following on sores
@@ -503,7 +549,7 @@ def main():
         # Reboot the rigs
         # for rig in rigs:
             # rig.reboot_rig()
-        banner("Reboot for Source Install")
+        banner("Reboot for Source Install or fuweb")
         run_process(rigs, Commands.reboot_rig)
 
         print("main: finished rebooting rigs")
