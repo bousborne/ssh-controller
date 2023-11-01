@@ -91,6 +91,25 @@ def use_user_data(cipher_suite):
     return user_data
 
 
+def add_rig_to_user_data(user_data, cipher_suite):
+    name = input("Enter name: ")
+    ip_address = input("Enter IP address: ")
+    username = input("Enter username: ")
+    password = getpass.getpass("Enter password: ")
+    encrypted_password = cipher_suite.encrypt(password.encode())
+
+    # Update the existing user data dictionary
+    rigs = user_data.get('rigs', {})
+    rigs[name] = (ip_address, username, encrypted_password)
+    user_data['rigs'] = rigs
+
+    with open(USER_DATA_FILE, "wb") as f:
+        pickle.dump(user_data, f)
+
+    print(f"Data for {name} added to the user data.")
+    return user_data
+
+
 class Commands:
     def __init__(self, retry_time=20, host=None, username=None, password=None):
         self.retry_time = retry_time
@@ -226,7 +245,7 @@ class Commands:
         #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"]
         # else:
         #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"]
-        self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"]
+        self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"]
         self.run_cmd()
         # self.cmd_list = ["confirm shell svcadm restart -s akd"]
         # self.run_cmd()
@@ -427,6 +446,8 @@ def create_parser():
     parser.add_argument('-r', '--rig', action='store', type=str, help='store a value for rig')
     parser.add_argument('-hs', '--headers', action='store_true', help='install headers')
     parser.add_argument("--setup", help="Set to True to setup user data", action='store_true')
+    parser.add_argument("--add_rig", help="Set to True to setup user data", action='store_true')
+    parser.add_argument("--show", help="Set to True to setup user data", action='store_true')
 
     return parser
 
@@ -456,6 +477,18 @@ def main():
     if args.setup:
         user_data = setup_user_data(cipher_suite)
     user_data = use_user_data(cipher_suite)
+
+    if args.add_rig:
+        user_data = use_user_data(cipher_suite)
+        if user_data is not None:
+            user_data = add_rig_to_user_data(user_data, cipher_suite)
+
+    if args.show:
+        data = use_user_data(cipher_suite)
+        if user_data is not None:
+            for each in user_data:
+                print(f"{each}\n")
+        return
 
     banner("Setup Rigs")
     # rigs_dict = {
