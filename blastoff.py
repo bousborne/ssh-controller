@@ -1,5 +1,37 @@
 #!/usr/bin/env python3
 
+# Steps to run script:
+#
+# 1. See the list of global variables below, and change any paths to match your build directories
+#
+# 2. Save this file in a place locally, in which you are okay with log files being written to that directory as well
+#
+# 3. (Optional) Symlink this to your local binary folder so it can be ran from anywhere (might require sudo):
+#    ln -s "$(pwd)/blastoff.py" /usr/local/bin/blastoff
+#
+# 4. This step will only be ran once to setup the access information.
+#    Run the command 'blastoff --setup', and enter the appliance and build machine information as it is asked:
+#
+#    $ blastoff --setup
+#    You are now setting up ssh credentials for appliance #0
+#    Enter appliance name (or 'done' to finish): nori
+#    Enter IP address: 10.133.64.215
+#    Enter username: root
+#    Enter password:
+#
+#    You are now setting up ssh credentials for appliance #1
+#    Enter appliance name (or 'done' to finish): done
+#
+#    You are now setting up ssh credentials for your build server
+#
+#    Enter build host address (ex: opensores.us.oracle.com): opensores.us.oracle.com
+#    Enter username for build host: your_username_here
+#
+#    Script currently only works with keys for build machines.
+#
+#    Data saved.
+
+
 import pdb
 import sys
 import select
@@ -26,6 +58,79 @@ logging.basicConfig(
 USER_DATA_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "user_data.pkl")
 KEY_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "key.key")
 
+NFS_MOUNT_COMMAND = None
+INSTALL_SCRIPT_COMMAND = None
+INSTALL_FILENAME = "/install.ksh"
+INSTALL_FILENAME_PATH = None
+LOG_FILE_PATH = None
+INSTALL_SOURCE_COMMAND = None
+REBOOT_COMMAND = "confirm maintenance system reboot"
+
+
+# Function to construct NFS mount command
+def create_nfs_mount_command(build_host, build_location, gate_location):
+    return f"confirm shell mkdir -p /tmp/on && mount -F nfs {build_host}:{build_location}/{gate_location} /tmp/on/"
+
+# Other base strings
+INSTALL_KSH = "confirm shell /tmp/on/sbin/./install.ksh"
+FULIB_COMMAND = "confirm shell /usr/lib/ak/tools/fulib /tmp/on"
+FUWEB_COMMAND = "confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"
+BUILD_BASE = "/export/ws"
+
+def create_sbin_directory_path(build_location, gate_location):
+    return f"{build_location}/{gate_location}/sbin"
+
+BUILD_COMMANDS = [
+    "pwd && cd usr/src/ && build here -Cid && echo $?",
+    "pwd && cd usr/fish/ && build here -Cid && echo $?",
+    "pwd && cd usr/src/ && build -iP make sgsheaders"
+]
+
+def create_log_file_path(build_location, gate_location):
+    return f"{build_location}/{gate_location}/log.i386/here.log"
+
+AWK_COMMANDS = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exit}}']
+
+# Function to construct and return the full command strings
+def create_commands(build_host, build_location, gate_location):
+    global NFS_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, INSTALL_FILENAME_PATH
+    NFS_MOUNT_COMMAND = create_nfs_mount_command(build_host, build_location, gate_location)
+    sbin_directory = create_sbin_directory_path(build_location, gate_location)
+    LOG_FILE_PATH = create_log_file_path(build_location, gate_location)
+    INSTALL_FILENAME_PATH = build_location + '/' + gate_location + '/sbin' + INSTALL_FILENAME
+    # Construct INSTALL_SCRIPT_COMMAND
+    INSTALL_SCRIPT_COMMAND = f"confirm shell {sbin_directory}{INSTALL_FILENAME}"
+    INSTALL_SOURCE_COMMAND = f"confirm shell /tmp/on/sbin/.{INSTALL_FILENAME}"
+
+
+
+
+"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
+"confirm shell /tmp/on/sbin/./install.ksh"
+"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
+"confirm shell /usr/lib/ak/tools/fulib /tmp/on"
+"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
+
+"confirm shell /usr/lib/ak/tools/fulib /tmp/on"
+"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
+"confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"
+
+
+"/export/ws/bousborn/on-gate/sbin"
+"/export/ws/bousborn/on-gate/sbin"
+"/export/ws/bousborn/on-gate/sbin/install.ksh"
+
+"pwd && cd usr/src/ && build here -Cid && echo $?"
+"pwd && cd usr/fish/ && build here -Cid && echo $?"
+"pwd && cd usr/src/ && build -iP make sgsheaders"
+
+"/export/ws/bousborn/on-gate/log.i386/here.log"
+
+"awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exit}}'
+
+
+
+
 def write_key():
     """
     Generates a key and save it into a file
@@ -46,8 +151,12 @@ def load_key():
 def setup_user_data(cipher_suite):
     rigs = {}
 
+    banner("Application Setup")
+    i = 0
     while True:
-        name = input("Enter name (or 'done' to finish): ")
+        print(f"\nYou are now setting up ssh credentials for appliance #{i}")
+
+        name = input("Enter appliance name (or 'done' to finish): ")
         if name.lower() == 'done':
             break
         ip_address = input("Enter IP address: ")
@@ -55,11 +164,19 @@ def setup_user_data(cipher_suite):
         password = getpass.getpass("Enter password: ")
         encrypted_password = cipher_suite.encrypt(password.encode())
         rigs[name] = (ip_address, username, encrypted_password)
+        i += 1
+
+    print("\nYou are now setting up ssh credentials for your build server")
+    print("Note: script currently only works with keys for build machines.\n")
 
     host = input("Enter build host address (ex: opensores.us.oracle.com): ")
     username = input("Enter username for build host: ")
 
-    user_data = {'rigs': rigs, 'host': host, 'username': username}
+    gate = input("\nEnter gate home on build host \n"
+                 "Example: if your gate is located at /export/ws/username/on-gate,\n"
+                 "then the gate home would be just 'on-gate': ")
+
+    user_data = {'rigs': rigs, 'host': host, 'username': username, 'gate': gate}
 
     with open(USER_DATA_FILE, "wb") as f:
         pickle.dump(user_data, f)
@@ -69,6 +186,7 @@ def setup_user_data(cipher_suite):
 
 
 def use_user_data(cipher_suite):
+    banner("Confirming appliance info")
     try:
         with open(USER_DATA_FILE, "rb") as f:
             user_data = pickle.load(f)
@@ -83,7 +201,7 @@ def use_user_data(cipher_suite):
         ip_address, username, encrypted_password = data
         decrypted_password = cipher_suite.decrypt(encrypted_password).decode()
         print(
-            f"Access granted for {name} with IP Address: {ip_address}, Username: {username}, and Password: {decrypted_password}")
+            f"{name} IP Address: {ip_address}, Username: {username}")
         rigs[name] = (ip_address, username, decrypted_password)
 
     user_data['rigs'] = rigs
@@ -146,6 +264,7 @@ class Commands:
             except Exception as e:
                 logging.error("Could not SSH to %s, waiting for it to start" % self.host)
                 logging.error(f"Encountered the following error: {e}")
+                logging.error("This is normal!! Do not exit. Continue to wait.")
                 self.connected = False
                 time.sleep(2 ** i)  # Exponential backoff
 
@@ -190,8 +309,7 @@ class Commands:
 
     def reboot_rig(self):
         logging.info("Rebooting %s" % self.host)
-        reboot_command = "confirm maintenance system reboot"
-        self.cmd_list = [reboot_command]
+        self.cmd_list = [REBOOT_COMMAND]
         self.run_cmd()
 
     def wait_for_rig_reboot(self, timeout=600, retry_interval=45, max_retries=20, log_callback=None):
@@ -223,37 +341,34 @@ class Commands:
 
     def install_source(self):
         logging.info("%s: INSTALL SOURCE" % self.host)
-        logging.info("%s: INSTALL SOURCE pass" % self.password)
 
-        self.cmd_list = ["confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"]
+        self.cmd_list = [NFS_MOUNT_COMMAND]
         self.run_cmd()
-        self.cmd_list = ["confirm shell /tmp/on/sbin/./install.ksh"]
+        self.cmd_list = [INSTALL_SOURCE_COMMAND]
         self.run_cmd()
 
     def install_fulib(self):
         logging.info("%s: INSTALL FISH" % self.host)
-        self.cmd_list = ["confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"]
+        self.cmd_list = [NFS_MOUNT_COMMAND]
         self.run_cmd()
-        self.cmd_list = ["confirm shell /usr/lib/ak/tools/fulib /tmp/on"]
+        self.cmd_list = [FULIB_COMMAND]
         self.run_cmd()
 
     def install_fuweb(self):
         logging.info("%s: INSTALL FUWEB" % self.host)
-        self.cmd_list = ["confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"]
+        self.cmd_list = [NFS_MOUNT_COMMAND]
         self.run_cmd()
         # if fast:
         #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"]
         # else:
         #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"]
-        self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"]
+        self.cmd_list = [FUWEB_COMMAND]
         self.run_cmd()
         # self.cmd_list = ["confirm shell svcadm restart -s akd"]
         # self.run_cmd()
 
     def create_install_file(self):
         logging.info("%s: CREATE INSTALL FILE" % self.host)
-        # self.host = "opensores.us.oracle.com"
-        # self.username = "bousborn"
         try:
             sftp = self.ssh_client.open_sftp()
         except paramiko.ssh_exception.SSHException as e:
@@ -269,8 +384,7 @@ class Commands:
         except FileNotFoundError:
             sftp.mkdir("/export/ws/bousborn/on-gate/sbin")
 
-        remote_filename = "/export/ws/bousborn/on-gate/sbin/install.ksh"
-        remote_file = sftp.file(remote_filename, 'w')
+        remote_file = sftp.file(INSTALL_FILENAME_PATH, 'w')
         remote_file.write("""ROOT=
 BASE=/tmp/on
 FBASE=$BASE
@@ -319,13 +433,11 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
         remote_file.close()
 
         # Make the file executable
-        stdin, stdout, stderr = self.ssh_client.exec_command("chmod +x /export/ws/bousborn/on-gate/sbin/install.ksh")
+        stdin, stdout, stderr = self.ssh_client.exec_command("chmod +x " + INSTALL_FILENAME_PATH)
         sftp.close()
 
     def remove_install_file(self):
         logging.info("%s: REMOVE INSTALL FILE" % self.host)
-        # self.host = "opensores.us.oracle.com"
-        # self.username = "bousborn"
         try:
             sftp = self.ssh_client.open_sftp()
         except paramiko.ssh_exception.SSHException as e:
@@ -336,11 +448,10 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
             self.ensure_connection()
             sftp = self.ssh_client.open_sftp()
 
-        remote_filename = "/export/ws/bousborn/on-gate/sbin/install.ksh"
         try:
-            sftp.stat(remote_filename)
+            sftp.stat(INSTALL_FILENAME_PATH)
             # File exists, so remove it
-            sftp.remove(remote_filename)
+            sftp.remove(INSTALL_FILENAME_PATH)
             print("File removed successfully.")
         except FileNotFoundError:
             # File does not exist
@@ -350,9 +461,7 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
 
     def build_source(self):
         logging.info("%s: BUILD SOURCE" % self.host)
-        # self.host = "opensores.us.oracle.com"
-        # self.username = "bousborn"
-        self.cmd_list = ["pwd && cd usr/src/ && build here -Cid && echo $?"]
+        self.cmd_list = [BUILD_COMMANDS[0]]
         ret = self.run_cmd()
         print(f"build source ret: {ret}")
         if ret.find("failed") != -1:
@@ -366,9 +475,7 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
 
     def build_fish(self):
         logging.info("%s: BUILD FISH" % self.host)
-        # self.host = "opensores.us.oracle.com"
-        # self.username = "bousborn"
-        self.cmd_list = ["pwd && cd usr/fish/ && build here -Cid && echo $?"]
+        self.cmd_list = [BUILD_COMMANDS[1]]
         ret = self.run_cmd()
         print(f"build FISH ret: {ret}")
         if ret.find("failed") != -1:
@@ -382,7 +489,7 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
 
     def install_headers(self):
         logging.info("%s: INSTALL HEADERS" % self.host)
-        self.cmd_list = ["pwd && cd usr/src/ && build -iP make sgsheaders"]
+        self.cmd_list = [BUILD_COMMANDS[2]]
         ret = self.run_cmd()
         # self.cmd_list = ["pwd && cd usr/src/ && make install_h"]
         # ret = self.run_cmd()
@@ -390,8 +497,6 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
 
 
     def print_here_log_errors(self):
-        # self.host = "opensores.us.oracle.com"
-        # self.username = "bousborn"
         print(f"printing log errors!")
         if not self.ssh_client.get_transport():
             print("No transport available to %s." % self.host)
@@ -401,23 +506,15 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
                 print("Not connected to %s." % self.host)
                 self.connect()
         sftp = self.ssh_client.open_sftp()
-        with sftp.open("/export/ws/bousborn/on-gate/log.i386/here.log", "r") as f:
+        with sftp.open(LOG_FILE_PATH, "r") as f:
             contents = f.read()
             decoded_contents = contents.decode()
-            command = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exit}}']
+            command = [AWK_COMMANDS[0], AWK_COMMANDS[1]]
             result = subprocess.run(command, input=decoded_contents, check=True, stdout=subprocess.PIPE,
                                     universal_newlines=True)
             print(f"print log results!")
             print(result.stdout)
             print(f"done print")
-
-    def rig_test(self):
-        self.cmd_list = [
-            'shares select prj20 replication select action-000 sendestimate',
-            'shares select prj20 replication select action-001 sendestimate',
-            'shares select prj1 replication select action-002 sendestimate'
-        ]
-        self.run_cmd()
 
 
 from concurrent.futures import ThreadPoolExecutor
@@ -464,19 +561,39 @@ key = load_key()
 cipher_suite = Fernet(key)
 
 def main():
-    parser = create_parser()
-    args = parser.parse_args()
-
-    banner("Pickle Setup")
-
 
     parser = create_parser()
     args = parser.parse_args()
 
-    banner("Pickle Setup")
+    user_data = None
     if args.setup:
         user_data = setup_user_data(cipher_suite)
-    user_data = use_user_data(cipher_suite)
+        return
+    else:
+        user_data = use_user_data(cipher_suite)
+
+    # Example user inputs (these would be obtained through user input in the actual script)
+    build_host = user_data['host']
+    build_location = BUILD_BASE + '/' + user_data['username']
+    gate_location = user_data['gate']
+
+    # Get and print the commands
+    create_commands(build_host, build_location, gate_location)
+    commands = [
+        NFS_MOUNT_COMMAND,
+        FULIB_COMMAND,
+        FUWEB_COMMAND,
+        INSTALL_SCRIPT_COMMAND,
+        INSTALL_SOURCE_COMMAND,
+        BUILD_COMMANDS[0],
+        BUILD_COMMANDS[1],
+        BUILD_COMMANDS[2],
+        LOG_FILE_PATH,
+        AWK_COMMANDS[0],
+        AWK_COMMANDS[1]
+    ]
+    for command in commands:
+        print(command)
 
     if args.add_rig:
         user_data = use_user_data(cipher_suite)
@@ -595,10 +712,6 @@ def main():
 
         print("main: finished waiting for reboot on rigs")
 
-        # Run rig test
-        # run_process(rigs, Commands.rig_test)
-
-        print("main: finished running rig test")
 
     banner("Process Complete.")
     print("main: FULL PROCESS COMPLETE")
