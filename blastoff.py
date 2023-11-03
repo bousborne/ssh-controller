@@ -38,6 +38,12 @@ Steps:
 This docstring serves as a comprehensive guide to preparing and running the 'blastoff' script for
 automating builds and deployments.
 
+
+    Current Limitations:
+
+        * Incremental Build only
+        * Does not work on Clustered systems
+
 """
 """
     Creates and returns an argparse parser for the 'Blastoff' utility.
