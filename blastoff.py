@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 
 """
+This module provides implementations of streamlining the building and
+installing process of the 'fish' shell and associated source code on
+development machines
+
+Written by: Benjamin Ousborne
+Date: November 3, 2023
+Contact: Ben.Ousborn@oracle.com
+"""
+
+"""
 A guide on how to configure and run the 'blastoff' script for build automation.
 
 Prerequisites:
