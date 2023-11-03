@@ -1,36 +1,97 @@
 #!/usr/bin/env python3
 
-# Steps to run script:
-#
-# 1. See the list of global variables below, and change any paths to match your build directories
-#
-# 2. Save this file in a place locally, in which you are okay with log files being written to that directory as well
-#
-# 3. (Optional) Symlink this to your local binary folder so it can be ran from anywhere (might require sudo):
-#    ln -s "$(pwd)/blastoff.py" /usr/local/bin/blastoff
-#
-# 4. This step will only be ran once to setup the access information.
-#    Run the command 'blastoff --setup', and enter the appliance and build machine information as it is asked:
-#
-#    $ blastoff --setup
-#    You are now setting up ssh credentials for appliance #0
-#    Enter appliance name (or 'done' to finish): nori
-#    Enter IP address: 10.133.64.215
-#    Enter username: root
-#    Enter password:
-#
-#    You are now setting up ssh credentials for appliance #1
-#    Enter appliance name (or 'done' to finish): done
-#
-#    You are now setting up ssh credentials for your build server
-#
-#    Enter build host address (ex: opensores.us.oracle.com): opensores.us.oracle.com
-#    Enter username for build host: your_username_here
-#
-#    Script currently only works with keys for build machines.
-#
-#    Data saved.
+"""
+A guide on how to configure and run the 'blastoff' script for build automation.
 
+Prerequisites:
+    Ensure the paths of global variables in the script match your build directories.
+
+Steps:
+    1. Save this script in a directory where you intend to keep log files.
+
+    2. Optionally, create a symlink to make 'blastoff' accessible from any location:
+       Execute the following command, which may require sudo permissions:
+       ln -s "$(pwd)/blastoff.py" /usr/local/bin/blastoff
+
+    3. To set up the script initially, run the 'blastoff --setup' command. This will guide you through
+       setting up SSH credentials for the appliances and the build server. For example:
+
+           $ blastoff --setup
+           You are now setting up ssh credentials for appliance #0
+           Enter appliance name (or 'done' to finish): nori
+           Enter IP address: 10.133.64.215
+           Enter username: root
+           Enter password:
+
+           You are now setting up ssh credentials for appliance #1
+           Enter appliance name (or 'done' to finish): done
+
+           You are now setting up ssh credentials for your build server
+
+           Enter build host address (e.g., opensores.us.oracle.com): opensores.us.oracle.com
+           Enter your username for build host: your_username_here
+
+       Note: The script currently supports key-based authentication for build machines only.
+
+    4. After entering all necessary information, the script will save the data and be ready for use.
+
+This docstring serves as a comprehensive guide to preparing and running the 'blastoff' script for
+automating builds and deployments.
+
+"""
+"""
+    Creates and returns an argparse parser for the 'Blastoff' utility.
+
+    The 'Blastoff' utility streamlines the building and installing process of the 'fish' shell and associated
+    source code on development machines, along with providing options for managing different configurations.
+
+    Usage:
+        blastoff [options]
+
+    Options:
+        -h, --help            Show this help message and exit.
+        --setup               Prepare the environment for first-time use.
+        -ss, --skip_src       Skip the compilation of the source code.
+        -sf, --skip_fish      Skip the compilation of the fish shell.
+        -fu, --fuweb          Perform the fuweb installation procedure.
+        --fast                Perform the fuweb installation in fast mode, with reduced checks.
+        -hs, --headers        Install the necessary header files.
+        -r, --rig             Specify the rig identifier for targeted installation.
+        --add_rig             Add a new rig configuration to the system.
+        --show                Display the current configuration and status.
+
+    Common Command Combinations:
+        Initial Setup:
+            blastoff --setup
+            Sets up user data and configurations necessary for first-time use.
+
+        Full Installation:
+            blastoff --fuweb --headers
+            Executes a full installation, including fuweb install and headers, without compiling source or fish.
+
+        Skipping Compilation:
+            blastoff --skip_src --skip_fish
+            Runs the installation process but skips compilation steps.
+
+        Fast Installation:
+            blastoff --fuweb --fast
+            Performs a fuweb installation quickly, with reduced checks.
+
+        Installation on a Specific Rig:
+            blastoff --fuweb -r DEV001
+            Targets the fuweb installation to a specific rig, identified by 'DEV001'.
+
+        Add a New Rig Configuration:
+            blastoff --add_rig
+            Initiates the process to add a new rig configuration to the system.
+
+        Show Current Configuration:
+            blastoff --show
+            Outputs the current configuration and status of the utility.
+
+    Returns:
+        An instance of argparse.ArgumentParser configured for 'Blastoff'.
+"""
 
 import pdb
 import sys
@@ -74,7 +135,8 @@ def create_nfs_mount_command(build_host, build_location, gate_location):
 # Other base strings
 INSTALL_KSH = "confirm shell /tmp/on/sbin/./install.ksh"
 FULIB_COMMAND = "confirm shell /usr/lib/ak/tools/fulib /tmp/on"
-FUWEB_COMMAND = "confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"
+FUWEB_COMMAND = "confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"
+FUWEB_FAST_COMMAND = "confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"
 BUILD_BASE = "/export/ws"
 
 def create_sbin_directory_path(build_location, gate_location):
@@ -101,34 +163,6 @@ def create_commands(build_host, build_location, gate_location):
     # Construct INSTALL_SCRIPT_COMMAND
     INSTALL_SCRIPT_COMMAND = f"confirm shell {sbin_directory}{INSTALL_FILENAME}"
     INSTALL_SOURCE_COMMAND = f"confirm shell /tmp/on/sbin/.{INSTALL_FILENAME}"
-
-
-
-
-"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
-"confirm shell /tmp/on/sbin/./install.ksh"
-"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
-"confirm shell /usr/lib/ak/tools/fulib /tmp/on"
-"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
-
-"confirm shell /usr/lib/ak/tools/fulib /tmp/on"
-"confirm shell mkdir -p /tmp/on && mount -F nfs opensores.us.oracle.com:/export/ws/bousborn/on-gate /tmp/on/"
-"confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"
-
-
-"/export/ws/bousborn/on-gate/sbin"
-"/export/ws/bousborn/on-gate/sbin"
-"/export/ws/bousborn/on-gate/sbin/install.ksh"
-
-"pwd && cd usr/src/ && build here -Cid && echo $?"
-"pwd && cd usr/fish/ && build here -Cid && echo $?"
-"pwd && cd usr/src/ && build -iP make sgsheaders"
-
-"/export/ws/bousborn/on-gate/log.i386/here.log"
-
-"awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exit}}'
-
-
 
 
 def write_key():
@@ -170,13 +204,13 @@ def setup_user_data(cipher_suite):
     print("Note: script currently only works with keys for build machines.\n")
 
     host = input("Enter build host address (ex: opensores.us.oracle.com): ")
-    username = input("Enter username for build host: ")
+    # username = input("Enter username for build host: ")
 
     gate = input("\nEnter gate home on build host \n"
                  "Example: if your gate is located at /export/ws/username/on-gate,\n"
                  "then the gate home would be just 'on-gate': ")
 
-    user_data = {'rigs': rigs, 'host': host, 'username': username, 'gate': gate}
+    user_data = {'rigs': rigs, 'host': host, 'gate': gate}
 
     with open(USER_DATA_FILE, "wb") as f:
         pickle.dump(user_data, f)
@@ -354,18 +388,19 @@ class Commands:
         self.cmd_list = [FULIB_COMMAND]
         self.run_cmd()
 
-    def install_fuweb(self):
+    def install_fuweb(self, **kwargs):
+        fast = kwargs.get('fast', False)
         logging.info("%s: INSTALL FUWEB" % self.host)
         self.cmd_list = [NFS_MOUNT_COMMAND]
         self.run_cmd()
-        # if fast:
-        #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"]
-        # else:
-        #     self.cmd_list = ["confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"]
-        self.cmd_list = [FUWEB_COMMAND]
+
+        if fast:
+            fuweb_cmd = FUWEB_FAST_COMMAND
+        else:
+            fuweb_cmd = FUWEB_COMMAND
+
+        self.cmd_list = [fuweb_cmd]
         self.run_cmd()
-        # self.cmd_list = ["confirm shell svcadm restart -s akd"]
-        # self.run_cmd()
 
     def create_install_file(self):
         logging.info("%s: CREATE INSTALL FILE" % self.host)
@@ -520,31 +555,45 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
 from concurrent.futures import ThreadPoolExecutor
 
 
-def run_process(instances, method):
+def run_process(instances, method, **kwargs):
     with ThreadPoolExecutor() as executor:
-        results = executor.map(method, instances)
+        # Pass the extra parameters to the method
+        results = executor.map(lambda instance: method(instance, **kwargs), instances)
     return list(results)
 
 
 def create_parser():
-    desc = 'This program facilitates in helping build both fish and source, ' \
-           'as well as installing it on developer rigs.'
-    parser = argparse.ArgumentParser(description=desc,
-                                     epilog='run "blastoff --setup" to set it up for the first time.')
-    # parser.add_argument('-u', '--fulib', action='store_true',
-    #                     help='enable fulib compile and install')
+    # Descriptive text for the program usage
+    description_text = (
+        'This utility program streamlines the process of building and installing '
+        'the "fish" shell and associated "source" code on development machines.'
+    )
+
+    # Text to display after the argument help
+    epilog_text = 'Execute "blastoff --setup" to configure the tool for initial use.'
+
+    # Create the parser with the specified program description and epilog
+    parser = argparse.ArgumentParser(description=description_text, epilog=epilog_text)
+
+    # Define arguments with improved help descriptions
     parser.add_argument('-ss', '--skip_src', action='store_true',
-                        help='skip source compile')
+        help='Skip the compilation of the source code.')
     parser.add_argument('-sf', '--skip_fish', action='store_true',
-                        help='skip fish compile')
-    parser.add_argument('-f', '--fuweb', action='store_true',
-                        help='do fuweb install')
-    parser.add_argument('--fast', action='store_true', help='do fuweb install quickly')
-    parser.add_argument('-r', '--rig', action='store', type=str, help='store a value for rig')
-    parser.add_argument('-hs', '--headers', action='store_true', help='install headers')
-    parser.add_argument("--setup", help="Set to True to setup user data", action='store_true')
-    parser.add_argument("--add_rig", help="Set to True to setup user data", action='store_true')
-    parser.add_argument("--show", help="Set to True to setup user data", action='store_true')
+        help='Skip the compilation of the fish shell.')
+    parser.add_argument('-fu', '--fuweb', action='store_true',
+        help='Perform the fuweb installation procedure.')
+    parser.add_argument('--fast', action='store_true',
+        help='Perform the fuweb installation in fast mode, with reduced checks.')
+    parser.add_argument('-r', '--rig', action='store', type=str,
+        help='Specify the rig identifier for targeted installation.')
+    parser.add_argument('-hs', '--headers', action='store_true',
+        help='Install the necessary header files.')
+    parser.add_argument("--setup", action='store_true',
+        help="Prepare the environment for first-time use.")
+    parser.add_argument("--add_rig", action='store_true',
+        help="Add a new rig configuration to the system.")
+    parser.add_argument("--show", action='store_true',
+        help="Display the current configuration and status.")
 
     return parser
 
@@ -594,7 +643,10 @@ def main():
     ]
     for command in commands:
         print(command)
-
+    # Check for --fast without -f or --fuweb
+    if args.fast and not args.fuweb:
+        print(NFS_MOUNT_COMMAND)
+        parser.error("--fast requires -fu or --fuweb")
     if args.add_rig:
         user_data = use_user_data(cipher_suite)
         if user_data is not None:
@@ -685,7 +737,7 @@ def main():
     if args.fuweb:
         banner("Install fuweb")
         print("main: install fuweb")
-        run_process(rigs, Commands.install_fuweb)
+        run_process(rigs, Commands.install_fuweb, fast=True)
         print("main: completed fuweb install")
 
     if not args.skip_src:
