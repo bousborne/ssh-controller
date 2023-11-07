@@ -220,13 +220,13 @@ def setup_user_data(cipher_suite):
     print("Note: script currently only works with keys for build machines.\n")
 
     host = input("Enter build host address (ex: opensores.us.oracle.com): ")
-    # username = input("Enter username for build host: ")
+    username = input("Enter username for build host: ")
 
     gate = input("\nEnter gate home on build host \n"
                  "Example: if your gate is located at /export/ws/username/on-gate,\n"
                  "then the gate home would be just 'on-gate': ")
 
-    user_data = {'rigs': rigs, 'host': host, 'gate': gate}
+    user_data = {'rigs': rigs, 'host': host, 'username': username, 'gate': gate}
 
     with open(USER_DATA_FILE, "wb") as f:
         pickle.dump(user_data, f)
