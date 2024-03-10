@@ -141,6 +141,8 @@ INSTALL_FILENAME = "/install.ksh"
 INSTALL_FILENAME_PATH = None
 LOG_FILE_PATH = None
 INSTALL_SOURCE_COMMAND = None
+STAT_COMMAND = None
+CREATE_SBIN = None
 REBOOT_COMMAND = "confirm maintenance system reboot"
 
 
@@ -171,7 +173,8 @@ AWK_COMMANDS = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exi
 
 # Function to construct and return the full command strings
 def create_commands(build_host, build_location, gate_location):
-    global NFS_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, INSTALL_FILENAME_PATH
+    global NFS_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, \
+        INSTALL_FILENAME_PATH, STAT_COMMAND, CREATE_SBIN
     NFS_MOUNT_COMMAND = create_nfs_mount_command(build_host, build_location, gate_location)
     sbin_directory = create_sbin_directory_path(build_location, gate_location)
     LOG_FILE_PATH = create_log_file_path(build_location, gate_location)
@@ -179,7 +182,8 @@ def create_commands(build_host, build_location, gate_location):
     # Construct INSTALL_SCRIPT_COMMAND
     INSTALL_SCRIPT_COMMAND = f"confirm shell {sbin_directory}{INSTALL_FILENAME}"
     INSTALL_SOURCE_COMMAND = f"confirm shell /tmp/on/sbin/.{INSTALL_FILENAME}"
-
+    STAT_COMMAND = f"/export/ws/bousborn/{gate_location}/sbin"
+    CREATE_SBIN = f"/export/ws/bousborn/{gate_location}/sbin"
 
 def write_key():
     """
@@ -253,6 +257,12 @@ def use_user_data(cipher_suite):
         print(
             f"{name} IP Address: {ip_address}, Username: {username}")
         rigs[name] = (ip_address, username, decrypted_password)
+
+    # Printing the build server information
+    print("\nBuild Server Information:")
+    print(f"Host: {user_data.get('host', 'Not Set')}")
+    print(f"Username: {user_data.get('username', 'Not Set')}")
+    print(f"Gate: {user_data.get('gate', 'Not Set')}")
 
     user_data['rigs'] = rigs
 
@@ -420,6 +430,8 @@ class Commands:
 
     def create_install_file(self):
         logging.info("%s: CREATE INSTALL FILE" % self.host)
+        self.connect()
+        self.ensure_connection()
         try:
             sftp = self.ssh_client.open_sftp()
         except paramiko.ssh_exception.SSHException as e:
@@ -431,9 +443,11 @@ class Commands:
             sftp = self.ssh_client.open_sftp()
 
         try:
-            sftp.stat("/export/ws/bousborn/on-gate/sbin")
+            logging.info("%s: stat file" % self.host)
+            sftp.stat(STAT_COMMAND)
         except FileNotFoundError:
-            sftp.mkdir("/export/ws/bousborn/on-gate/sbin")
+            logging.info("%s: mkdir" % self.host)
+            sftp.mkdir(CREATE_SBIN)
 
         remote_file = sftp.file(INSTALL_FILENAME_PATH, 'w')
         remote_file.write("""ROOT=
@@ -528,6 +542,11 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
         logging.info("%s: BUILD FISH" % self.host)
         self.cmd_list = [BUILD_COMMANDS[1]]
         ret = self.run_cmd()
+        if isinstance(ret, str):
+            print("FISH ret is a string.")
+        else:
+            print("FISH ret is not a string.")
+        print(f"build FISH ret type: {type(ret)}")
         print(f"build FISH ret: {ret}")
         if ret.find("failed") != -1:
             print(f"build FISH ret false and print")
@@ -596,6 +615,10 @@ def create_parser():
         help='Skip the compilation of the source code.')
     parser.add_argument('-sf', '--skip_fish', action='store_true',
         help='Skip the compilation of the fish shell.')
+    parser.add_argument('-si', '--skip_install', action='store_true',
+        help='Skip the install of fish or src.')
+    parser.add_argument('-io', '--install_only', action='store_true',
+        help='Skip the install of fish or src.')
     parser.add_argument('-fu', '--fuweb', action='store_true',
         help='Perform the fuweb installation procedure.')
     parser.add_argument('--fast', action='store_true',
@@ -670,9 +693,6 @@ def main():
 
     if args.show:
         data = use_user_data(cipher_suite)
-        if user_data is not None:
-            for each in user_data:
-                print(f"{each}\n")
         return
 
     banner("Setup Rigs")
@@ -709,7 +729,7 @@ def main():
         headers_results = run_process(sores, Commands.install_headers)
         headers_results = headers_results[0]
 
-    if not args.skip_src:
+    if not args.skip_src and not args.install_only:
         banner("Build Source")
         print("main: did NOT skip build src")
         print("main: building source")
@@ -718,14 +738,15 @@ def main():
         print(f"build SOURCE result: {build_result}")
         if build_result:
             print("main: completed build source")
-            banner("Create Install Files")
-            run_process(sores, Commands.create_install_file)
-            print("main: completed create source install file")
         else:
             print("main: failed to build source")
             sys.exit(1)
 
-    if not args.skip_fish:
+    banner("Create Install Files")
+    build_results = run_process(sores, Commands.create_install_file)
+    print("main: completed create source install file")
+
+    if not args.skip_fish and not args.install_only:
         banner("Build Fish")
         print("main: did NOT skip build fish")
         print("main: building fish")
@@ -737,14 +758,14 @@ def main():
         print("main: completed build fish")
 
 
-    if not args.skip_src:
+    if not args.skip_src and not args.skip_install:
         banner("Install Source")
         print("main: did NOT skip install src")
         print("main: installing source")
         run_process(rigs, Commands.install_source)
         print("main: completed install source")
 
-    if not args.skip_fish:
+    if not args.skip_fish and not args.skip_install:
         banner("Install fulib")
         print("main: enable fulib compile and install")
         run_process(rigs, Commands.install_fulib)
@@ -756,14 +777,14 @@ def main():
         run_process(rigs, Commands.install_fuweb, fast=True)
         print("main: completed fuweb install")
 
-    if not args.skip_src:
+    if not args.skip_src and not args.skip_install:
         banner("Remove Install File")
         run_process(sores, Commands.remove_install_file)
 
     # banner("Delete Sores Instance")
     # # Make sure I don't run following on sores
     # del sores_instance
-    if not args.skip_src:
+    if not args.skip_src and not args.skip_install:
         # Reboot the rigs
         # for rig in rigs:
             # rig.reboot_rig()
