@@ -145,6 +145,30 @@ STAT_COMMAND = None
 CREATE_SBIN = None
 REBOOT_COMMAND = "confirm maintenance system reboot"
 
+import subprocess
+import platform
+
+
+def flush_dns_macos():
+    try:
+        if platform.system() == "Darwin":  # Check if the OS is macOS
+            print("Flushing DNS")
+            # Flush the DNS cache
+            subprocess.run(["sudo", "killall", "-HUP", "mDNSResponder"], check=True)
+            print("Flushed DNS cache on macOS.")
+
+            # Optionally, you can restart the Wi-Fi service to ensure new DNS settings take effect
+            # This step requires the network interface name, typically "Wi-Fi" or "en0" for wireless.
+            # Uncomment the lines below if you wish to include this step, replacing "Wi-Fi" if necessary.
+            # subprocess.run(["networksetup", "-setnetworkserviceenabled", "Wi-Fi", "off"], check=True)
+            # subprocess.run(["networksetup", "-setnetworkserviceenabled", "Wi-Fi", "on"], check=True)
+            # print("Restarted Wi-Fi service.")
+
+        else:
+            print("This script is designed for macOS only.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error occurred: {e}")
+
 
 # Function to construct NFS mount command
 def create_nfs_mount_command(build_host, build_location, gate_location):
@@ -331,6 +355,20 @@ class Commands:
         if not self.connected:
             logging.error("Could not connect to %s. Giving up" % self.host)
             sys.exit(1)
+
+    def create_install_file(self):
+        logging.info("%s: CREATE INSTALL FILE" % self.host)
+        self.connect()
+        self.ensure_connection()
+        try:
+            sftp = self.ssh_client.open_sftp()
+        except paramiko.ssh_exception.SSHException as e:
+            # Handle SSHException, such as re-establishing SSH connection
+            print("SSHException occurred:", str(e))
+            time.sleep(5)  # Wait for a few seconds before retrying
+            self.connect()
+            self.ensure_connection()
+            sftp = self.ssh_client.open_sftp()
 
 
     def run_cmd(self):
@@ -589,13 +627,112 @@ echo "Installation Complete. If kernel was installed, please restart machine..."
 
 from concurrent.futures import ThreadPoolExecutor
 
-
 def run_process(instances, method, **kwargs):
     with ThreadPoolExecutor() as executor:
         # Pass the extra parameters to the method
         results = executor.map(lambda instance: method(instance, **kwargs), instances)
     return list(results)
 
+def adjust_combined_actions(args):
+    # Adjust for source
+    if args.source or (not args.build_source and not args.install_source and not args.fish):
+        args.build_source = True
+        args.install_source = True
+
+    # Adjust for fish
+    if args.fish or (not args.build_fish and not args.install_fish and not args.source):
+        args.build_fish = True
+        args.install_fish = True
+
+def run_establish_connections(rigs, command):
+    banner("Establishing connections...")
+    run_process(rigs, command.connect)
+    banner("Connections established.")
+
+
+def run_build_source(sores, command):
+    print("Building source code...")
+    banner("Build Source")
+    print("main: did NOT skip build src")
+    print("main: building source")
+    build_results = run_process(sores, command.build_source)
+    build_result = build_results[0]
+    print(f"build SOURCE result: {build_result}")
+    if build_result:
+        print("main: completed build source")
+    else:
+        print("main: failed to build source")
+        sys.exit(1)
+
+def run_create_install_file(sores, command):
+    print("Installing source code...")
+    banner("Create Install Files")
+    build_results = run_process(sores, command.create_install_file)
+    print("main: completed create source install file")
+
+def run_remove_install_file(sores, command):
+    print("Installing source code...")
+    banner("Remove Install File")
+    run_process(sores, command.remove_install_file)
+
+def run_install_source(rigs, command):
+    print("Installing source code...")
+    banner("Install Source")
+    print("main: did NOT skip install src")
+    print("main: installing source")
+    run_process(rigs, command.install_source)
+    print("main: completed install source")
+
+def run_build_fish(sores, command):
+    print("Building fish shell...")
+    banner("Build Fish")
+    print("main: did NOT skip build fish")
+    print("main: building fish")
+    build_results = run_process(sores, command.build_fish)
+    build_result = build_results[0]
+    if not build_result:
+        print("main: Failed build source")
+        sys.exit(1)
+    print("main: completed build fish")
+
+def run_install_fish(rigs, command):
+    print("Installing fish shell...")
+    banner("Install fulib")
+    print("main: enable fulib compile and install")
+    run_process(rigs, command.install_fulib)
+    print("main: completed fulib install")
+
+def run_install_headers(sores, command):
+    print("Installing headers...")
+    banner("Install Headers")
+    headers_results = run_process(sores, command.install_headers)
+    headers_results = headers_results[0]
+    return headers_results
+
+def run_fuweb_installation(rigs, command, fast=False):
+    mode = "fast" if fast else "normal"
+    print(f"Running fuweb installation in {mode} mode...")
+    banner(f"Install fuweb in {mode} mode")
+    print("main: install fuweb")
+    run_process(rigs, command.install_fuweb, fast=True)
+    print("main: completed fuweb install")
+
+def run_reboot_machine(rigs, command):
+    # Reboot the rigs
+    # for rig in rigs:
+    # rig.reboot_rig()
+    banner("Reboot for Source Install or fuweb")
+    run_process(rigs, command.reboot_rig)
+
+    print("main: finished rebooting rigs")
+
+    banner("Wait for Reboot")
+    # Wait for the rigs to reboot
+    run_process(rigs, command.wait_for_rig_reboot)
+    # for rig in rigs:
+    # rig.wait_for_rig_reboot()
+
+    print("main: finished waiting for reboot on rigs")
 
 def create_parser():
     # Descriptive text for the program usage
@@ -610,29 +747,25 @@ def create_parser():
     # Create the parser with the specified program description and epilog
     parser = argparse.ArgumentParser(description=description_text, epilog=epilog_text)
 
-    # Define arguments with improved help descriptions
-    parser.add_argument('-ss', '--skip_src', action='store_true',
-        help='Skip the compilation of the source code.')
-    parser.add_argument('-sf', '--skip_fish', action='store_true',
-        help='Skip the compilation of the fish shell.')
-    parser.add_argument('-si', '--skip_install', action='store_true',
-        help='Skip the install of fish or src.')
-    parser.add_argument('-io', '--install_only', action='store_true',
-        help='Skip the install of fish or src.')
-    parser.add_argument('-fu', '--fuweb', action='store_true',
-        help='Perform the fuweb installation procedure.')
-    parser.add_argument('--fast', action='store_true',
-        help='Perform the fuweb installation in fast mode, with reduced checks.')
+    # Individual actions
+    parser.add_argument('--build-source', action='store_true', help='Build the source code only.')
+    parser.add_argument('--install-source', action='store_true', help='Install the source code only.')
+    parser.add_argument('--build-fish', action='store_true', help='Build the fish shell only.')
+    parser.add_argument('--install-fish', action='store_true', help='Install the fish shell only.')
+
+    # Combined actions
+    parser.add_argument('--source', action='store_true', help='Build and install the source code.')
+    parser.add_argument('--fish', action='store_true', help='Build and install the fish shell.')
+
+    # Other options
+    parser.add_argument('--headers', action='store_true', help='Install necessary header files, unrelated to source or fish options.')
+    parser.add_argument('--fuweb', action='store_true', help='Perform the fuweb installation procedure.')
+    parser.add_argument('--fast', action='store_true', help='Use with --fuweb for a fast mode installation with reduced checks.')
+    parser.add_argument('--setup', action='store_true', help="Prepare the environment for first-time use.")
+    parser.add_argument('--show', action='store_true', help="Display the current configuration and status.")
+    parser.add_argument("--add_rig", action='store_true', help="Add a new rig configuration to the system.")
     parser.add_argument('-r', '--rig', action='store', type=str,
         help='Specify the rig identifier for targeted installation.')
-    parser.add_argument('-hs', '--headers', action='store_true',
-        help='Install the necessary header files.')
-    parser.add_argument("--setup", action='store_true',
-        help="Prepare the environment for first-time use.")
-    parser.add_argument("--add_rig", action='store_true',
-        help="Add a new rig configuration to the system.")
-    parser.add_argument("--show", action='store_true',
-        help="Display the current configuration and status.")
 
     return parser
 
@@ -652,6 +785,9 @@ def main():
 
     parser = create_parser()
     args = parser.parse_args()
+    adjust_combined_actions(args)
+
+    # flush_dns_macos()
 
     user_data = None
     if args.setup:
@@ -696,10 +832,6 @@ def main():
         return
 
     banner("Setup Rigs")
-    # rigs_dict = {
-    #     "nori": ("nori", "root", "l1admin1"),
-    #     "chutoro": ("chutoro", "root", "l1admin1")
-    # }
 
     for rig_name in user_data['rigs']:
         print(rig_name)
@@ -724,83 +856,30 @@ def main():
     sores_instance = Commands(host=user_data['host'], username=user_data['username'])
     sores.append(sores_instance)
 
+    run_establish_connections(rigs, Commands)
+
     if args.headers:
-        banner("Install Headers")
-        headers_results = run_process(sores, Commands.install_headers)
-        headers_results = headers_results[0]
+        header_results = run_install_headers(sores, Commands)
 
-    if not args.skip_src and not args.install_only:
-        banner("Build Source")
-        print("main: did NOT skip build src")
-        print("main: building source")
-        build_results = run_process(sores, Commands.build_source)
-        build_result = build_results[0]
-        print(f"build SOURCE result: {build_result}")
-        if build_result:
-            print("main: completed build source")
-        else:
-            print("main: failed to build source")
-            sys.exit(1)
+    if args.build_source:
+        run_build_source(sores, Commands)
+    if args.build_fish:
+        run_build_fish(sores, Commands)
 
-    banner("Create Install Files")
-    build_results = run_process(sores, Commands.create_install_file)
-    print("main: completed create source install file")
-
-    if not args.skip_fish and not args.install_only:
-        banner("Build Fish")
-        print("main: did NOT skip build fish")
-        print("main: building fish")
-        build_results = run_process(sores, Commands.build_fish)
-        build_result = build_results[0]
-        if not build_result:
-            print("main: Failed build source")
-            sys.exit(1)
-        print("main: completed build fish")
-
-
-    if not args.skip_src and not args.skip_install:
-        banner("Install Source")
-        print("main: did NOT skip install src")
-        print("main: installing source")
-        run_process(rigs, Commands.install_source)
-        print("main: completed install source")
-
-    if not args.skip_fish and not args.skip_install:
-        banner("Install fulib")
-        print("main: enable fulib compile and install")
-        run_process(rigs, Commands.install_fulib)
-        print("main: completed fulib install")
-
+    if args.install_source:
+        run_create_install_file(sores, Commands)
+        print("Creating install file for source...")
+        run_install_source(rigs, Commands)
+        print("Removing install file for source...")
+    if args.install_fish:
+        run_install_fish(rigs, Commands)
     if args.fuweb:
-        banner("Install fuweb")
-        print("main: install fuweb")
-        run_process(rigs, Commands.install_fuweb, fast=True)
-        print("main: completed fuweb install")
+        run_fuweb_installation(rigs, Commands, args.fast)
 
-    if not args.skip_src and not args.skip_install:
-        banner("Remove Install File")
-        run_process(sores, Commands.remove_install_file)
-
-    # banner("Delete Sores Instance")
-    # # Make sure I don't run following on sores
-    # del sores_instance
-    if not args.skip_src and not args.skip_install:
-        # Reboot the rigs
-        # for rig in rigs:
-            # rig.reboot_rig()
-        banner("Reboot for Source Install or fuweb")
-        run_process(rigs, Commands.reboot_rig)
-
-        print("main: finished rebooting rigs")
-
-        banner("Wait for Reboot")
-        # Wait for the rigs to reboot
-        run_process(rigs, Commands.wait_for_rig_reboot)
-        # for rig in rigs:
-            # rig.wait_for_rig_reboot()
-
-        print("main: finished waiting for reboot on rigs")
-
+    #Remove install file and reboot if source install
+    if args.install_source:
+        run_remove_install_file(sores, Commands)
+        run_reboot_machine(rigs, Commands)
 
     banner("Process Complete.")
     print("main: FULL PROCESS COMPLETE")
