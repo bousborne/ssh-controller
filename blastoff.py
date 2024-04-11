@@ -643,12 +643,12 @@ def run_process(instances, method, **kwargs):
 
 def adjust_combined_actions(args):
     # Adjust for source
-    if args.source or (not args.build_source and not args.install_source and not args.fish):
+    if args.source or (not args.build_source and not args.install_source and not args.fish and not args.install_fish):
         args.build_source = True
         args.install_source = True
 
     # Adjust for fish
-    if args.fish or (not args.build_fish and not args.install_fish and not args.source):
+    if args.fish or (not args.build_fish and not args.install_fish and not args.source and not args.install_source):
         args.build_fish = True
         args.install_fish = True
 
