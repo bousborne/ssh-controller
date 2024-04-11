@@ -1,0 +1,131 @@
+#!/bin/ksh -p
+
+#
+# Copyright (c) 2009, 2022, Oracle and/or its affiliates.
+#
+
+function usage
+{
+	echo $1
+	cat <<-USAGE >&2
+
+	Usage:
+	fulib [proto]
+
+	If the appliance was previously fu'd, then an attempt will be made to
+	automatically determine the location of the fish proto directory.  If
+	that fails or if the appliance has never been fu'd then the full
+	pathname to a fish proto directory must be passed as an argument.
+
+	USAGE
+	exit 2
+}
+
+function fail
+{
+	echo "fulib: $*" >&2
+	exit 1
+}
+
+fu_release=/var/ak/etc/fu
+mach=$(uname -p)
+
+[[ $# -gt 0 ]] && PROTO=$1 || PROTO=
+
+if [[ -z $PROTO && -f $fu_release ]]; then
+	fu_archives=$(awk "/^fu'ed from /{print \$3}" $fu_release)
+	if [[ $(basename $fu_archives) == ${mach}-nondebug ]]; then
+		proto_basename=fish-root_${mach}-nd
+	else
+		proto_basename=fish-root_$mach
+	fi
+	data_dir=$(dirname $(dirname $fu_archives))
+	PROTO=$data_dir/proto/$proto_basename
+	echo "Appliance last fu'd from $fu_archives"
+	[[ ! -d $PROTO ]] && \
+	    usage "Can't determine proto location from fu archive location"
+fi
+
+[[ -z $PROTO ]] && usage
+[[ $PROTO = ${PROTO#/} ]] && fail "'$PROTO' must be an absolute path"
+
+PROTO_SUBDIR=data/proto/fish-root_$mach
+if [[ "$PROTO" != *$PROTO_SUBDIR && "$PROTO" != *$PROTO_SUBDIR-nd ]]; then
+	PROTO=$PROTO/$PROTO_SUBDIR
+	echo "Proto directory not found in path, using: $PROTO"
+fi
+
+[[ ! -d $PROTO ]] && usage "Can't find proto area: $PROTO"
+
+FILES='
+usr/lib/ak/libak.so.1
+usr/lib/ak/64/libak.so.1
+usr/lib/ak/libakcld.so.1
+usr/lib/ak/64/libakcld.so.1
+usr/lib/ak/librepl.so.1
+usr/lib/ak/64/librepl.so.1
+usr/lib/ak/libakutil.so.1
+usr/lib/ak/64/libakutil.so.1
+usr/lib/ak/libak_snmp.so.1
+usr/lib/ak/64/libak_snmp.so.1
+usr/lib/ak/apache2/libexec/mod_ak.so
+usr/lib/mdb
+usr/lib/smbsrv
+usr/lib/ak/modules
+'
+
+for FILE in $FILES; do
+        stat $PROTO/$FILE > /dev/null 2>&1 || fail "$FILE not found in $PROTO."\
+            "\nPlease specify path to workspace root or full proto path"\
+	    "(likely: \$WS/data/proto/fish-root_$mach) "
+done
+
+SVCS='
+akd
+akproxyd
+appliance/kit/http:default
+appliance/kit/cloud
+repld
+net-snmp
+'
+echo "Disabling services: \c";
+for s in $SVCS; do
+    # Check if service is online
+    if svcs -Ho state $s 2>/dev/null | grep -q "online"; then
+        echo "Disabling $s..."
+        svcadm disable -s $s
+    else
+        echo "$s is not enabled or does not exist, skipping..."
+    fi
+done
+echo "done";
+
+ro=$(svcprop -p factory/readonly appliance/kit/identity 2>/dev/null)
+[[ "x$ro" = xtrue ]] && fu_readonly=true
+
+[[ $fu_readonly = true ]] && mount -o remount,rw /
+
+echo "Installing libraries from $PROTO";
+
+for FILE in $FILES; do
+	echo "Installing $FILE ... \c"
+	cd $PROTO && find $FILE -depth -print | cpio -pdmu /
+done
+
+if [[ $PROTO/usr/include/ak/ak_errno.h -nt /usr/include/ak/ak_errno.h ]]; then
+	echo "ak_errno.h changed, rebuilding web...";
+	cp $PROTO/usr/include/ak/ak_errno.h /usr/include/ak
+	/usr/lib/ak/tools/akbuildweb -p `svcprop -p factory/product kit/identity`
+fi
+
+[[ $fu_readonly = true ]] && mount -o remount,ro /
+
+echo "Enabling services... \c";
+svcadm enable -s akd
+svcadm enable -s akproxyd
+svcadm enable -s appliance/kit/http:default
+svcadm enable -s repld
+svcadm enable -s cloud
+# akd will automatically start net-snmp, if configured.
+
+echo "done";

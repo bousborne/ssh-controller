@@ -498,7 +498,15 @@ AK=/usr/lib/ak
 PYTHONDIRVP=python3.7
 
 svcadm disable repld
-svcadm disable -s akd
+#svcadm disable -s akd
+
+# Check if 'akd' service is enabled
+if svcs -Ho state akd | grep -q "online"; then
+    echo "Service akd is enabled, disabling it now..."
+    svcadm disable -s akd
+else
+    echo "Service akd is not enabled, skipping disable step."
+fi
 
 mount -o rw,remount /
 cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
