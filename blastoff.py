@@ -143,7 +143,10 @@ LOG_FILE_PATH = None
 INSTALL_SOURCE_COMMAND = None
 STAT_COMMAND = None
 CREATE_SBIN = None
+BUILD_COMMANDS = None
 REBOOT_COMMAND = "confirm maintenance system reboot"
+DISABLE_AKD = "confirm svcadm disable -s akd"
+ENABLE_AKD = "confirm svcadm enable -s akd"
 
 import subprocess
 import platform
@@ -172,23 +175,20 @@ def flush_dns_macos():
 
 # Function to construct NFS mount command
 def create_nfs_mount_command(build_host, build_location, gate_location):
-    return f"confirm shell mkdir -p /tmp/on && mount -F nfs {build_host}:{build_location}/{gate_location} /tmp/on/"
+    return f"confirm shell svcadm enable autofs"
+    # return f"confirm shell mkdir -p /tmp/on && mount -F nfs {build_host}:{build_location}/{gate_location} /tmp/on/"
 
 # Other base strings
-INSTALL_KSH = "confirm shell /tmp/on/sbin/./install.ksh"
-FULIB_COMMAND = "confirm shell /usr/lib/ak/tools/fulib /tmp/on"
-FUWEB_COMMAND = "confirm shell /usr/lib/ak/tools/fuweb -p /tmp/on/data/proto/fish-root_i386"
-FUWEB_FAST_COMMAND = "confirm shell /usr/lib/ak/tools/fuweb -Ip /tmp/on/data/proto/fish-root_i386"
+NET_GATE_BASE = "/net/opensores/export/ws/bousborn/on-gate-estimate"
+DATA_BASE = f"{NET_GATE_BASE}/data"
+INSTALL_KSH = f"confirm shell {DATA_BASE}/sbin/./install.ksh"
+FULIB_COMMAND = f"confirm shell /usr/lib/ak/tools/fulib {NET_GATE_BASE}"
+FUWEB_COMMAND = f"confirm shell /usr/lib/ak/tools/fuweb -p {DATA_BASE}/proto/fish-root_i386"
+FUWEB_FAST_COMMAND = f"confirm shell /usr/lib/ak/tools/fuweb -Ip {DATA_BASE}/proto/fish-root_i386"
 BUILD_BASE = "/export/ws"
 
 def create_sbin_directory_path(build_location, gate_location):
-    return f"{build_location}/{gate_location}/sbin"
-
-BUILD_COMMANDS = [
-    "pwd && cd usr/src/ && build here -Cid && echo $?",
-    "pwd && cd usr/fish/ && build here -Cid && echo $?",
-    "pwd && cd usr/src/ && build -iP make sgsheaders"
-]
+    return f"{build_location}/{gate_location}/data"
 
 def create_log_file_path(build_location, gate_location):
     return f"{build_location}/{gate_location}/log.i386/here.log"
@@ -198,16 +198,21 @@ AWK_COMMANDS = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exi
 # Function to construct and return the full command strings
 def create_commands(build_host, build_location, gate_location):
     global NFS_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, \
-        INSTALL_FILENAME_PATH, STAT_COMMAND, CREATE_SBIN
+        INSTALL_FILENAME_PATH, STAT_COMMAND, CREATE_SBIN, BUILD_COMMANDS
     NFS_MOUNT_COMMAND = create_nfs_mount_command(build_host, build_location, gate_location)
     sbin_directory = create_sbin_directory_path(build_location, gate_location)
     LOG_FILE_PATH = create_log_file_path(build_location, gate_location)
-    INSTALL_FILENAME_PATH = build_location + '/' + gate_location + '/sbin' + INSTALL_FILENAME
+    INSTALL_FILENAME_PATH = build_location + '/' + gate_location + '/data' + INSTALL_FILENAME
     # Construct INSTALL_SCRIPT_COMMAND
     INSTALL_SCRIPT_COMMAND = f"confirm shell {sbin_directory}{INSTALL_FILENAME}"
-    INSTALL_SOURCE_COMMAND = f"confirm shell /tmp/on/sbin/.{INSTALL_FILENAME}"
-    STAT_COMMAND = f"/export/ws/bousborn/{gate_location}/sbin"
-    CREATE_SBIN = f"/export/ws/bousborn/{gate_location}/sbin"
+    INSTALL_SOURCE_COMMAND = f"confirm shell {DATA_BASE}/.{INSTALL_FILENAME}"
+    STAT_COMMAND = f"/export/ws/bousborn/{gate_location}/data"
+    CREATE_SBIN = f"/export/ws/bousborn/{gate_location}/data"
+    BUILD_COMMANDS = [
+        f"cd /export/ws/bousborn/{gate_location} && pwd && cd usr/src/ && build here -Cid && echo $?",
+        f"cd /export/ws/bousborn/{gate_location} && pwd && cd usr/fish/ && build here -Cid && echo $?",
+        f"cd /export/ws/bousborn/{gate_location} && pwd && cd usr/src/ && build -iP make sgsheaders"
+    ]
 
 def write_key():
     """
@@ -241,6 +246,9 @@ def setup_user_data(cipher_suite):
         username = input("Enter username: ")
         password = getpass.getpass("Enter password: ")
         encrypted_password = cipher_suite.encrypt(password.encode())
+        # kerberos_username = input("Enter Kerberos username: ")
+        # kerberos_password = getpass.getpass("Enter Kerberos password: ")
+        # encrypted_kerberos_password = cipher_suite.encrypt(kerberos_password.encode())
         rigs[name] = (ip_address, username, encrypted_password)
         i += 1
 
@@ -277,9 +285,10 @@ def use_user_data(cipher_suite):
     rigs = {}
     for name, data in loaded_rigs_dict.items():
         ip_address, username, encrypted_password = data
+        # ip_address, username, encrypted_password, kerberos_username, encrypted_kerberos_password = data
         decrypted_password = cipher_suite.decrypt(encrypted_password).decode()
-        print(
-            f"{name} IP Address: {ip_address}, Username: {username}")
+        # decrypted_kerberos_password = cipher_suite.decrypt(encrypted_kerberos_password).decode()
+        print(f"{name} IP Address: {ip_address}, Username: {username}")
         rigs[name] = (ip_address, username, decrypted_password)
 
     # Printing the build server information
@@ -356,19 +365,19 @@ class Commands:
             logging.error("Could not connect to %s. Giving up" % self.host)
             sys.exit(1)
 
-    def create_install_file(self):
-        logging.info("%s: CREATE INSTALL FILE" % self.host)
-        self.connect()
-        self.ensure_connection()
-        try:
-            sftp = self.ssh_client.open_sftp()
-        except paramiko.ssh_exception.SSHException as e:
-            # Handle SSHException, such as re-establishing SSH connection
-            print("SSHException occurred:", str(e))
-            time.sleep(5)  # Wait for a few seconds before retrying
-            self.connect()
-            self.ensure_connection()
-            sftp = self.ssh_client.open_sftp()
+    # def create_install_file(self):
+    #     logging.info("%s: CREATE INSTALL FILE" % self.host)
+    #     self.connect()
+    #     self.ensure_connection()
+    #     try:
+    #         sftp = self.ssh_client.open_sftp()
+    #     except paramiko.ssh_exception.SSHException as e:
+    #         # Handle SSHException, such as re-establishing SSH connection
+    #         print("SSHException occurred:", str(e))
+    #         time.sleep(5)  # Wait for a few seconds before retrying
+    #         self.connect()
+    #         self.ensure_connection()
+    #         sftp = self.ssh_client.open_sftp()
 
 
     def run_cmd(self):
@@ -488,59 +497,7 @@ class Commands:
             sftp.mkdir(CREATE_SBIN)
 
         remote_file = sftp.file(INSTALL_FILENAME_PATH, 'w')
-        remote_file.write("""ROOT=
-BASE=/tmp/on
-FBASE=$BASE
-BLD=$BASE/data/build.i386/usr/src
-FBLD=$FBASE/data/build.i386/usr/fish
-AK=/usr/lib/ak
-
-PYTHONDIRVP=python3.7
-
-svcadm disable repld
-#svcadm disable -s akd
-
-# Check if 'akd' service is enabled
-if svcs -Ho state akd | grep -q "online"; then
-    echo "Service akd is enabled, disabling it now..."
-    svcadm disable -s akd
-else
-    echo "Service akd is not enabled, skipping disable step."
-fi
-
-mount -o rw,remount /
-cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
-cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/drv/amd64/
-cp $BLD/lib/libzfs/amd64/libzfs.so.1  $ROOT/lib/amd64/libzfs.so.1
-cp $BLD/cmd/zfs/zfs                   $ROOT/usr/sbin/zfs
-cp $BLD/cmd/ztest/amd64/ztest         $ROOT/usr/bin/ztest
-
-cp $FBLD/lib/ak/libak/amd64/libak.so.1           $ROOT/$AK/amd64/libak.so.1
-cp $FBLD/lib/ak/librepl/amd64/librepl.so.1       $ROOT/$AK/amd64/librepl.so.1
-cp $FBLD/appliance/nas/modules/core/amd64/nas.so $ROOT/$AK/modules/appliance/nas/amd64/nas.so
-mount -o ro,remount /
-
-echo "copied
-cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
-cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/drv/amd64/
-cp $BLD/lib/libzfs/amd64/libzfs.so.1  $ROOT/lib/amd64/libzfs.so.1
-cp $BLD/cmd/zfs/zfs                   $ROOT/usr/sbin/zfs
-cp $BLD/cmd/ztest/amd64/ztest         $ROOT/usr/bin/ztest
-
-cp $FBLD/lib/ak/libak/amd64/libak.so.1           $ROOT/$AK/amd64/libak.so.1
-cp $FBLD/lib/ak/librepl/amd64/librepl.so.1       $ROOT/$AK/amd64/librepl.so.1
-cp $FBLD/appliance/nas/modules/core/amd64/nas.so $ROOT/$AK/modules/appliance/nas/amd64/nas.so
-"
-
-echo "Setting mountpoints... \c";
-zfs set mountpoint=none system
-bootadm update-archive
-zfs set mountpoint=legacy system
-
-echo "Restarting services... \c";
-svcadm enable -s akd
-svcadm enable repld
-echo "Installation Complete. If kernel was installed, please restart machine...";""")
+        remote_file.write(src_install_script_text)
         remote_file.close()
 
         # Make the file executable
@@ -642,13 +599,20 @@ def run_process(instances, method, **kwargs):
     return list(results)
 
 def adjust_combined_actions(args):
-    # Adjust for source
-    if args.source or (not args.build_source and not args.install_source and not args.fish and not args.install_fish):
+    # Determine initial states: if no flags are set at all, default to True for related actions.
+    if not any([args.build_source, args.install_source, args.build_fish, args.install_fish, args.source, args.fish]):
+        args.build_source = args.install_source = args.build_fish = args.install_fish = True
+
+    # Adjust for source settings
+    if args.source:
+        # If `source` is explicitly True, ensure both source actions are enabled unless already set
         args.build_source = True
         args.install_source = True
 
-    # Adjust for fish
-    if args.fish or (not args.build_fish and not args.install_fish and not args.source and not args.install_source):
+
+    # Adjust for fish settings
+    if args.fish:
+        # If `fish` is explicitly True, ensure both fish actions are enabled unless already set
         args.build_fish = True
         args.install_fish = True
 
@@ -892,6 +856,189 @@ def main():
     banner("Process Complete.")
     print("main: FULL PROCESS COMPLETE")
 
+
+src_install_script_text = f"""
+ROOT=
+BASE={NET_GATE_BASE}
+FBASE=$BASE
+BLD=$BASE/data/build.i386/usr/src
+FBLD=$FBASE/data/build.i386/usr/fish
+AK=/usr/lib/ak
+
+PYTHONDIRVP=python3.7
+
+svcadm disable repld
+#svcadm disable -s akd
+
+# Check if 'akd' service is enabled
+if svcs -Ho state akd | grep -q "online"; then
+    echo "Service akd is enabled, disabling it now..."
+    svcadm disable -s akd
+else
+    echo "Service akd is not enabled, skipping disable step."
+fi
+
+mount -o rw,remount /
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/drv/amd64/
+cp $BLD/lib/libzfs/amd64/libzfs.so.1  $ROOT/lib/amd64/libzfs.so.1
+cp $BLD/cmd/zfs/zfs                   $ROOT/usr/sbin/zfs
+cp $BLD/cmd/ztest/amd64/ztest         $ROOT/usr/bin/ztest
+
+cp $FBLD/lib/ak/libak/amd64/libak.so.1           $ROOT/$AK/amd64/libak.so.1
+cp $FBLD/lib/ak/librepl/amd64/librepl.so.1       $ROOT/$AK/amd64/librepl.so.1
+cp $FBLD/appliance/nas/modules/core/amd64/nas.so $ROOT/$AK/modules/appliance/nas/amd64/nas.so
+mount -o ro,remount /
+
+echo "copied
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/fs/amd64/ || exit 1
+cp $BLD/uts/intel/zfs/debug64/zfs     $ROOT/kernel/drv/amd64/
+cp $BLD/lib/libzfs/amd64/libzfs.so.1  $ROOT/lib/amd64/libzfs.so.1
+cp $BLD/cmd/zfs/zfs                   $ROOT/usr/sbin/zfs
+cp $BLD/cmd/ztest/amd64/ztest         $ROOT/usr/bin/ztest
+
+cp $FBLD/lib/ak/libak/amd64/libak.so.1           $ROOT/$AK/amd64/libak.so.1
+cp $FBLD/lib/ak/librepl/amd64/librepl.so.1       $ROOT/$AK/amd64/librepl.so.1
+cp $FBLD/appliance/nas/modules/core/amd64/nas.so $ROOT/$AK/modules/appliance/nas/amd64/nas.so
+"
+
+echo "Setting mountpoints...";
+zfs set mountpoint=none system
+bootadm update-archive
+zfs set mountpoint=legacy system
+
+echo "Restarting services...";
+svcadm enable -s akd
+svcadm enable repld
+echo "Installation Complete. If kernel was installed, please restart machine...";
+
+"""
+
+
+# fish_install_script_text = """
+# #!/bin/ksh -p
+#
+# function usage
+# {
+#     echo $1
+#     cat <<-USAGE >&2
+#
+#     Usage:
+#     fulib [proto]
+#
+#     If the appliance was previously fu'd, then an attempt will be made to
+#     automatically determine the location of the fish proto directory. If
+#     that fails or if the appliance has never been fu'd then the full
+#     pathname to a fish proto directory must be passed as an argument.
+#
+#     USAGE
+#     exit 2
+# }
+#
+# function fail
+# {
+#     echo "fulib: $*" >&2
+#     exit 1
+# }
+#
+# fu_release=/var/ak/etc/fu
+# mach=$(uname -p)
+#
+# [[ $# -gt 0 ]] && PROTO=$1 || PROTO=
+#
+# if [[ -z $PROTO && -f $fu_release ]]; then
+#     fu_archives=$(awk "/^fu'ed from /{print \$3}" $fu_release)
+#     if [[ $(basename $fu_archives) == ${mach}-nondebug ]]; then
+#         proto_basename=fish-root_${mach}-nd
+#     else
+#         proto_basename=fish-root_$mach
+#     fi
+#     data_dir=$(dirname $(dirname $fu_archives))
+#     PROTO=$data_dir/proto/$proto_basename
+#     echo "Appliance last fu'd from $fu_archives"
+#     [[ ! -d $PROTO ]] && \
+#         usage "Can't determine proto location from fu archive location"
+# fi
+#
+# [[ -z $PROTO ]] && usage
+# [[ $PROTO = ${PROTO#/} ]] && fail "'$PROTO' must be an absolute path"
+#
+# PROTO_SUBDIR=data/proto/fish-root_$mach
+# if [[ "$PROTO" != *$PROTO_SUBDIR && "$PROTO" != *$PROTO_SUBDIR-nd ]]; then
+#     PROTO=$PROTO/$PROTO_SUBDIR
+#     echo "Proto directory not found in path, using: $PROTO"
+# fi
+#
+# [[ ! -d $PROTO ]] && usage "Can't find proto area: $PROTO"
+#
+# FILES='
+# usr/lib/ak/libak.so.1
+# usr/lib/ak/64/libak.so.1
+# usr/lib/ak/libakcld.so.1
+# usr/lib/ak/64/libakcld.so.1
+# usr/lib/ak/librepl.so.1
+# usr/lib/ak/64/librepl.so.1
+# usr/lib/ak/libakutil.so.1
+# usr/lib/ak/64/libakutil.so.1
+# usr/lib/ak/libak_snmp.so.1
+# usr/lib/ak/64/libak_snmp.so.1
+# usr/lib/ak/apache2/libexec/mod_ak.so
+# usr/lib/mdb
+# usr/lib/smbsrv
+# usr/lib/ak/modules
+# '
+#
+# for FILE in $FILES; do
+#     stat $PROTO/$FILE > / dev / null 2>&1 || fail "$FILE not found in $PROTO."\
+#     "\nPlease specify path to workspace root or full proto path"\
+#     "(likely: \$WS/data/proto/fish-root_$mach) "
+# done
+#
+# SVCS='
+# akd
+# akproxyd
+# appliance/kit/http:default
+# appliance/kit/cloud
+# repld
+# net-snmp
+# '
+# echo "Disabling services: \c";
+# for s in $SVCS; do
+#     echo "$s \c"
+#     svcadm disable -s $s
+# done
+# echo "done";
+#
+# ro=$(svcprop -p factory/readonly appliance/kit/identity 2>/dev/null)
+# [[ "x$ro" = xtrue ]] && fu_readonly=true
+#
+# [[ $fu_readonly = true ]] && mount -o remount,rw /
+#
+# echo "Installing libraries from $PROTO";
+#
+# for FILE in $FILES; do
+#     echo "Installing $FILE ... \c"
+#     cd $PROTO && find $FILE -depth -print | cpio -pdmu /
+# done
+#
+# if [[ $PROTO/usr/include/ak/ak_errno.h -nt /usr/include/ak/ak_errno.h ]]; then
+#     echo "ak_errno.h changed, rebuilding web...";
+#     cp $PROTO/usr/include/ak/ak_errno.h/usr/include/ak
+#     /usr/lib/ak/tools/akbuildweb -p `svcprop -p factory/product kit/identity`
+# fi
+#
+# [[ $fu_readonly = true]] && mount -o remount,ro /
+#
+# echo "Enabling services... \c";
+# svcadm enable -s akd
+# svcadm enable -s akproxyd
+# svcadm enable -s appliance/kit/http:default
+# svcadm enable -s repld
+# svcadm enable -s cloud
+# # akd will automatically start net-snmp, if configured.
+#
+# echo "done";
+# """
 
 if __name__ == '__main__':
     main()
