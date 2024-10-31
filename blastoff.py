@@ -136,6 +136,9 @@ USER_DATA_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "user
 KEY_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "key.key")
 
 NFS_MOUNT_COMMAND = None
+AUTO_MOUNT_COMMAND = None
+NFS_MOUNT_LOCATION = "/tmp/on"
+NFS_UNMOUNT_COMMAND = f"confirm shell umount {NFS_MOUNT_LOCATION}"
 INSTALL_SCRIPT_COMMAND = None
 INSTALL_FILENAME = "/install.ksh"
 INSTALL_FILENAME_PATH = None
@@ -172,19 +175,23 @@ def flush_dns_macos():
     except subprocess.CalledProcessError as e:
         print(f"Error occurred: {e}")
 
+def create_auto_mount_command(build_host, build_location, gate_location):
+    return f"confirm shell svcadm enable autofs"
 
 # Function to construct NFS mount command
 def create_nfs_mount_command(build_host, build_location, gate_location):
-    return f"confirm shell svcadm enable autofs"
-    # return f"confirm shell mkdir -p /tmp/on && mount -F nfs {build_host}:{build_location}/{gate_location} /tmp/on/"
+    # return f"confirm shell svcadm enable autofs"
+    command = f"confirm shell mkdir -p {NFS_MOUNT_LOCATION} && mount -F nfs {build_host}:{build_location}/{gate_location} {NFS_MOUNT_LOCATION}/"
+    print(f"mount command = {command}")
+    return command
 
 # Other base strings
-NET_GATE_BASE = "/net/opensores/export/ws/bousborn/on-gate-estimate"
-DATA_BASE = f"{NET_GATE_BASE}/data"
+NET_GATE_BASE = "/net/opensores/export/ws/bousborn/on-gate"
+DATA_BASE = f"{NET_GATE_BASE}"
 INSTALL_KSH = f"confirm shell {DATA_BASE}/sbin/./install.ksh"
-FULIB_COMMAND = f"confirm shell /usr/lib/ak/tools/fulib {NET_GATE_BASE}"
-FUWEB_COMMAND = f"confirm shell /usr/lib/ak/tools/fuweb -p {DATA_BASE}/proto/fish-root_i386"
-FUWEB_FAST_COMMAND = f"confirm shell /usr/lib/ak/tools/fuweb -Ip {DATA_BASE}/proto/fish-root_i386"
+FULIB_COMMAND = f"confirm shell /usr/lib/ak/tools/fulib {NFS_MOUNT_LOCATION}"
+FUWEB_COMMAND = f"confirm shell /usr/lib/ak/tools/fuweb -p {DATA_BASE}/data/proto/fish-root_i386"
+FUWEB_FAST_COMMAND = (f"confirm shell /usr/lib/ak/tools/fuweb -Ip {DATA_BASE}/data/proto/fish-root_i386")
 BUILD_BASE = "/export/ws"
 
 def create_sbin_directory_path(build_location, gate_location):
@@ -197,15 +204,16 @@ AWK_COMMANDS = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exi
 
 # Function to construct and return the full command strings
 def create_commands(build_host, build_location, gate_location):
-    global NFS_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, \
+    global NFS_MOUNT_COMMAND, AUTO_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, \
         INSTALL_FILENAME_PATH, STAT_COMMAND, CREATE_SBIN, BUILD_COMMANDS
     NFS_MOUNT_COMMAND = create_nfs_mount_command(build_host, build_location, gate_location)
+    AUTO_MOUNT_COMMAND = create_auto_mount_command(build_host, build_location, gate_location)
     sbin_directory = create_sbin_directory_path(build_location, gate_location)
     LOG_FILE_PATH = create_log_file_path(build_location, gate_location)
     INSTALL_FILENAME_PATH = build_location + '/' + gate_location + '/data' + INSTALL_FILENAME
     # Construct INSTALL_SCRIPT_COMMAND
     INSTALL_SCRIPT_COMMAND = f"confirm shell {sbin_directory}{INSTALL_FILENAME}"
-    INSTALL_SOURCE_COMMAND = f"confirm shell {DATA_BASE}/.{INSTALL_FILENAME}"
+    INSTALL_SOURCE_COMMAND = f"confirm shell {DATA_BASE}/data/.{INSTALL_FILENAME}"
     STAT_COMMAND = f"/export/ws/bousborn/{gate_location}/data"
     CREATE_SBIN = f"/export/ws/bousborn/{gate_location}/data"
     BUILD_COMMANDS = [
@@ -343,7 +351,7 @@ class Commands:
 
     def connect(self):
         for i in range(self.retry_time):
-            logging.info("Trying to connect to %s (%i/%i) with %s", self.host, i + 1, self.retry_time, self.password)
+            logging.info("Trying to connect to %s (%i/%i) with %s", self.host, i + 1, self.retry_time, self.username)
             print(f"Trying to connect to {self.host} ({i + 1}/{self.retry_time})")
 
             try:
@@ -351,34 +359,21 @@ class Commands:
                 self.connected = True
                 break
             except paramiko.AuthenticationException:
-                logging.error("Authentication failed when connecting to %s with %s" % self.host, self.password)
+                logging.error("Authentication failed when connecting to %s with %s", self.host, self.username)
                 self.connected = False
-                # sys.exit(1)
+                break
+            except paramiko.SSHException as e:
+                logging.error("Could not SSH to %s, waiting for it to start. Error: %s", self.host, str(e))
+                self.connected = False
+                time.sleep(2 ** i)  # Exponential backoff
             except Exception as e:
-                logging.error("Could not SSH to %s, waiting for it to start" % self.host)
-                logging.error(f"Encountered the following error: {e}")
-                logging.error("This is normal!! Do not exit. Continue to wait.")
+                logging.error("Could not SSH to %s, waiting for it to start. Error: %s", self.host, str(e))
                 self.connected = False
                 time.sleep(2 ** i)  # Exponential backoff
 
         if not self.connected:
-            logging.error("Could not connect to %s. Giving up" % self.host)
+            logging.error("Could not connect to %s. Giving up", self.host)
             sys.exit(1)
-
-    # def create_install_file(self):
-    #     logging.info("%s: CREATE INSTALL FILE" % self.host)
-    #     self.connect()
-    #     self.ensure_connection()
-    #     try:
-    #         sftp = self.ssh_client.open_sftp()
-    #     except paramiko.ssh_exception.SSHException as e:
-    #         # Handle SSHException, such as re-establishing SSH connection
-    #         print("SSHException occurred:", str(e))
-    #         time.sleep(5)  # Wait for a few seconds before retrying
-    #         self.connect()
-    #         self.ensure_connection()
-    #         sftp = self.ssh_client.open_sftp()
-
 
     def run_cmd(self):
         logging.info(f"Run command on {self.host}.")
@@ -448,7 +443,7 @@ class Commands:
 
     def install_source(self):
         logging.info("%s: INSTALL SOURCE" % self.host)
-
+        logging.info("%s: mount command: %s", self.host, NFS_MOUNT_COMMAND)
         self.cmd_list = [NFS_MOUNT_COMMAND]
         self.run_cmd()
         self.cmd_list = [INSTALL_SOURCE_COMMAND]
@@ -456,8 +451,13 @@ class Commands:
 
     def install_fulib(self):
         logging.info("%s: INSTALL FISH" % self.host)
+        logging.info("%s: UnMounting: " % NFS_UNMOUNT_COMMAND)
+        self.cmd_list = [NFS_UNMOUNT_COMMAND]
+        self.run_cmd()
+        logging.info("%s: Mounting: " % NFS_MOUNT_COMMAND)
         self.cmd_list = [NFS_MOUNT_COMMAND]
         self.run_cmd()
+        logging.info("%s: Running fulib: " % FULIB_COMMAND)
         self.cmd_list = [FULIB_COMMAND]
         self.run_cmd()
 
@@ -473,6 +473,9 @@ class Commands:
             fuweb_cmd = FUWEB_COMMAND
 
         self.cmd_list = [fuweb_cmd]
+        self.run_cmd()
+        svc_restart_cmd = 'confirm shell svcadm restart -s akd'
+        self.cmd_list = [svc_restart_cmd]
         self.run_cmd()
 
     def create_install_file(self):
@@ -490,12 +493,14 @@ class Commands:
             sftp = self.ssh_client.open_sftp()
 
         try:
-            logging.info("%s: stat file" % self.host)
-            sftp.stat(STAT_COMMAND)
+            logging.info("%s: stat file at %s", self.host, STAT_COMMAND)
+            stat = sftp.stat(STAT_COMMAND)
+            logging.info("%s: statted: %s", self.host, stat)
         except FileNotFoundError:
             logging.info("%s: mkdir" % self.host)
             sftp.mkdir(CREATE_SBIN)
 
+        logging.info("%s: INSTALL_FILENAME_PATH: %s", self.host, INSTALL_FILENAME_PATH)
         remote_file = sftp.file(INSTALL_FILENAME_PATH, 'w')
         remote_file.write(src_install_script_text)
         remote_file.close()
@@ -568,6 +573,17 @@ class Commands:
         # ret = self.run_cmd()
         print(f"install headers ret: {ret}")
 
+    def final_rig_setup(self):
+        logging.info("%s: MOUNTING ALL" % self.host)
+        logging.info("%s: UnMounting: " % NFS_UNMOUNT_COMMAND)
+        self.cmd_list = [NFS_UNMOUNT_COMMAND]
+        self.run_cmd()
+        logging.info("%s: Mounting /tmp/on: " % NFS_MOUNT_COMMAND)
+        self.cmd_list = [NFS_MOUNT_COMMAND]
+        self.run_cmd()
+        logging.info("%s: AutoMount: " % AUTO_MOUNT_COMMAND)
+        self.cmd_list = [AUTO_MOUNT_COMMAND]
+        self.run_cmd()
 
     def print_here_log_errors(self):
         print(f"printing log errors!")
@@ -600,7 +616,8 @@ def run_process(instances, method, **kwargs):
 
 def adjust_combined_actions(args):
     # Determine initial states: if no flags are set at all, default to True for related actions.
-    if not any([args.build_source, args.install_source, args.build_fish, args.install_fish, args.source, args.fish]):
+    if not any([args.build_source, args.install_source, args.build_fish, args.install_fish,
+                args.source, args.fish, args.fuweb]):
         args.build_source = args.install_source = args.build_fish = args.install_fish = True
 
     # Adjust for source settings
@@ -688,6 +705,13 @@ def run_fuweb_installation(rigs, command, fast=False):
     print("main: install fuweb")
     run_process(rigs, command.install_fuweb, fast=True)
     print("main: completed fuweb install")
+
+def run_final_rig_setup(rigs, command):
+    print("Setting up final mounts...")
+    banner("Setup Final Mounts")
+    print("Mount /tmp/on and autofs")
+    run_process(rigs, command.final_rig_setup)
+    print("main: completed mounting")
 
 def run_reboot_machine(rigs, command):
     # Reboot the rigs
@@ -777,6 +801,7 @@ def main():
     create_commands(build_host, build_location, gate_location)
     commands = [
         NFS_MOUNT_COMMAND,
+        AUTO_MOUNT_COMMAND,
         FULIB_COMMAND,
         FUWEB_COMMAND,
         INSTALL_SCRIPT_COMMAND,
@@ -853,6 +878,7 @@ def main():
         run_remove_install_file(sores, Commands)
         run_reboot_machine(rigs, Commands)
 
+    run_final_rig_setup(rigs, Commands)
     banner("Process Complete.")
     print("main: FULL PROCESS COMPLETE")
 
