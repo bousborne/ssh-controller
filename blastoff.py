@@ -73,7 +73,7 @@ automating builds and deployments.
         --fast                Perform the fuweb installation in fast mode, with reduced checks.
         -hs, --headers        Install the necessary header files.
         -r, --rig             Specify the rig identifier for targeted installation.
-        --add_rig             Add a new rig configuration to the system.
+        --add-rig             Add a new rig configuration to the system.
         --show                Display the current configuration and status.
 
     Common Command Combinations:
@@ -98,7 +98,7 @@ automating builds and deployments.
             Targets the fuweb installation to a specific rig, identified by 'DEV001'.
 
         Add a New Rig Configuration:
-            blastoff --add_rig
+            blastoff --add-rig
             Initiates the process to add a new rig configuration to the system.
 
         Show Current Configuration:
@@ -122,6 +122,7 @@ from cryptography.fernet import Fernet
 import getpass
 import os
 import pickle
+import re
 
 
 logging.basicConfig(
@@ -187,12 +188,17 @@ def create_nfs_mount_command(build_host, build_location, gate_location):
 
 # Other base strings
 NET_GATE_BASE = "/net/opensores/export/ws/bousborn/on-gate"
+HTTPS_GATE_BASE = ''
 DATA_BASE = f"{NET_GATE_BASE}"
 INSTALL_KSH = f"confirm shell {DATA_BASE}/sbin/./install.ksh"
 FULIB_COMMAND = f"confirm shell /usr/lib/ak/tools/fulib {NFS_MOUNT_LOCATION}"
 FUWEB_COMMAND = f"confirm shell /usr/lib/ak/tools/fuweb -p {DATA_BASE}/data/proto/fish-root_i386"
 FUWEB_FAST_COMMAND = (f"confirm shell /usr/lib/ak/tools/fuweb -Ip {DATA_BASE}/data/proto/fish-root_i386")
 BUILD_BASE = "/export/ws"
+FULL_BUILD_LOCATION = f"{DATA_BASE}/data/pkg/fish-i386-debug/"
+FULL_BUILD_FILE = ''
+FULL_BUILD_FILE_NAME = ''
+FULL_INSTALL_COMMAND = f"maintenance system updates download set url="
 
 def create_sbin_directory_path(build_location, gate_location):
     return f"{build_location}/{gate_location}/data"
@@ -205,7 +211,8 @@ AWK_COMMANDS = ["awk", '/: error:/ {for(i=1; i<=5; i++) {print; if(!getline) exi
 # Function to construct and return the full command strings
 def create_commands(build_host, build_location, gate_location):
     global NFS_MOUNT_COMMAND, AUTO_MOUNT_COMMAND, INSTALL_SCRIPT_COMMAND, LOG_FILE_PATH, INSTALL_SOURCE_COMMAND, \
-        INSTALL_FILENAME_PATH, STAT_COMMAND, CREATE_SBIN, BUILD_COMMANDS
+        INSTALL_FILENAME_PATH, STAT_COMMAND, CREATE_SBIN, BUILD_COMMANDS, FULL_BUILD_LOCATION, \
+        FULL_INSTALL_COMMAND, FULL_BUILD_FILE, FULL_BUILD_FILE_NAME, HTTPS_GATE_BASE
     NFS_MOUNT_COMMAND = create_nfs_mount_command(build_host, build_location, gate_location)
     AUTO_MOUNT_COMMAND = create_auto_mount_command(build_host, build_location, gate_location)
     sbin_directory = create_sbin_directory_path(build_location, gate_location)
@@ -221,6 +228,7 @@ def create_commands(build_host, build_location, gate_location):
         f"cd /export/ws/bousborn/{gate_location} && pwd && cd usr/fish/ && build here -Cid && echo $?",
         f"cd /export/ws/bousborn/{gate_location} && pwd && cd usr/src/ && build -iP make sgsheaders"
     ]
+    HTTPS_GATE_BASE = f"http://{build_host}{build_location}/{gate_location}/data/pkg/fish-i386-debug/"
 
 def write_key():
     """
@@ -478,6 +486,127 @@ class Commands:
         self.cmd_list = [svc_restart_cmd]
         self.run_cmd()
 
+        # Full call:
+        # current_tty =$(who am i | awk '{print $2}');
+        # sessions =$(who | awk -v tty="$current_tty" '$2 != tty {print $2}');
+        # for session in $sessions; do pkill -t "$session"; done
+
+        logout = "confirm shell "
+        logout += r"""current_tty=$(who am i | awk '{print $2}');"""
+        logout += r"""echo cur: $current_tty;"""
+        logout += r"""sessions=$(who | awk -v tty="$current_tty" """
+        logout += r"""'$2 != tty {print $2}');"""
+        logout += r"""echo sessions: $sessions;"""
+        logout += r"""for session in $sessions; do pkill -t "$session"; done"""
+        clean_string = logout.strip('"').strip("'")
+
+        self.cmd_list = [clean_string]
+        self.run_cmd()
+
+
+    def get_full_install_path(self):
+        global FULL_BUILD_FILE_NAME
+        full_path_to_file = ''
+        pkg_files = ''
+        logging.info("%s: GET FULL BUILD PATH" % self.host)
+        self.connect()
+        self.ensure_connection()
+        try:
+            sftp = self.ssh_client.open_sftp()
+        except paramiko.ssh_exception.SSHException as e:
+            # Handle SSHException, such as re-establishing SSH connection
+            print("SSHException occurred:", str(e))
+            time.sleep(5)  # Wait for a few seconds before retrying
+            self.connect()
+            self.ensure_connection()
+            sftp = self.ssh_client.open_sftp()
+        logging.info("%s: FULL_BUILD_LOCATION" % FULL_BUILD_LOCATION)
+        # Log the location being checked
+        logging.info(f"{self.host}: Checking files at {FULL_BUILD_LOCATION}")
+
+        # Get the list of files in the specified directory
+        try:
+            files = sftp.listdir(FULL_BUILD_LOCATION)
+            # Filter files to find the first one that ends with '.pkg'
+            pkg_files = [file for file in files if file.endswith('.pkg')]
+            FULL_BUILD_FILE_NAME = pkg_files
+            if pkg_files:
+                full_path_to_file = os.path.join(FULL_BUILD_LOCATION, pkg_files[0])
+                # FULL_BUILD_FILE_NAME = os.path.join(FULL_BUILD_LOCATION, pkg_files[0])
+                logging.info(f"Found .pkg file: {full_path_to_file}")
+                full_install_command = FULL_INSTALL_COMMAND + full_path_to_file
+                logging.info(f"full_install_command: {full_install_command}")
+                # self.cmd_list = [full_install_command]
+                # self.run_cmd()
+            else:
+                logging.info("No .pkg files found in the specified location.")
+        except IOError as e:
+            # Handle possible errors from sftp operations like permission issues
+            logging.error(f"Failed to list directory {FULL_BUILD_LOCATION}: {e}")
+        finally:
+            # Close the SFTP connection
+            sftp.close()
+        logging.info(f"returning: {full_path_to_file}")
+        return pkg_files[0]
+
+    def full_install(self):
+        global FULL_BUILD_FILE_NAME, FULL_INSTALL_COMMAND
+        logging.info("%s: FULL INSTALL" % self.host)
+        logging.info("%s: FULL_BUILD_FILE" % FULL_BUILD_FILE)
+        logging.info("%s: FULL_INSTALL_COMMAND" % FULL_INSTALL_COMMAND)
+        full_build_file_location = 'http://opensores.us.oracle.com/'
+        # full_install_command = FULL_INSTALL_COMMAND + FULL_BUILD_FILE_NAME
+        # logging.info("%s: full_install_command" % full_install_command)
+        full_file_location = HTTPS_GATE_BASE + FULL_BUILD_FILE_NAME[0]
+        script = (
+            f'script run("maintenance system updates download"); '
+            f'set("url", "{full_file_location}"); '
+            f'run("commit");'
+        )
+        # self.cmd_list = ['maintenance system updates download',
+        #                  'set url=/net/opensores/export/ws/bousborn/on-gate/data/pkg/fish-i386'
+        #                  '-debug/bousbornongate-nas-2024.11.07-12.0x.pkg', 'confirm']
+        # self.cmd_list = [full_install_command]
+        logging.info("%s: script" % script)
+        self.cmd_list = [script]
+        self.run_cmd()
+
+        # awk '{ line = $0 } END { print line }' | awk'{print $1}'
+        script = 'script run("top maintenance system updates"); out = run("show"); printf(out);'
+        self.cmd_list = [script]
+        out = self.run_cmd()
+        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', out)
+        clean_output = clean_output.replace('\r\n', '\n')
+        # Define the regex pattern for the date
+        # date_pattern = r'\d{4}\.\d{2}\.\d{2}'
+        date_version_pattern = r'(\d{4}\.\d{2}\.\d{2})-(\d+\.\d+)'
+        match = re.search(date_version_pattern, FULL_BUILD_FILE_NAME[0])
+        date = ''
+        version_number = ''
+        selection = ''
+        if match:
+            date = match.group(1)  # The first group captures the date
+            version_number = match.group(2).replace('.', '-')
+        date_version = date + ',' + version_number
+        for line in clean_output.split('\n')[3:]:  # Skip the header lines
+            if line.strip():  # Ensure the line is not empty
+                parts = line.split()  # Split by whitespace
+                update_name = parts[0]
+                release_date = ' '.join(parts[1:3])  # Combine the date and time parts
+                release_name = parts[3] if parts[3] != '-' else "No Name"  # Handle missing names
+                status = parts[-1]
+
+                print(
+                    f"Update: {update_name}, Date: {release_date}, Name: {release_name}, Status: {status}")
+                if date_version in update_name:
+                    selection = update_name
+                    print(f"GOT IT: {update_name}")
+        # script = (f"script run('top maintenance system updates select {selection}'); out = run('show'); printf(out);")
+        script = f"script run('top maintenance system updates select {selection}'); run('confirm upgrade -f')"
+
+        self.cmd_list = [script]
+        out = self.run_cmd()
+
     def create_install_file(self):
         logging.info("%s: CREATE INSTALL FILE" % self.host)
         self.connect()
@@ -617,7 +746,7 @@ def run_process(instances, method, **kwargs):
 def adjust_combined_actions(args):
     # Determine initial states: if no flags are set at all, default to True for related actions.
     if not any([args.build_source, args.install_source, args.build_fish, args.install_fish,
-                args.source, args.fish, args.fuweb]):
+                args.source, args.fish, args.fuweb]) and not args.full_install:
         args.build_source = args.install_source = args.build_fish = args.install_fish = True
 
     # Adjust for source settings
@@ -652,6 +781,19 @@ def run_build_source(sores, command):
     else:
         print("main: failed to build source")
         sys.exit(1)
+
+def run_get_full_install_path(sores, command):
+    print("Installing source code...")
+    banner("Get Full Build Path")
+    build_results = run_process(sores, command.get_full_install_path)
+    print("main: completed create source install file")
+    return build_results
+
+def run_full_install(sores, command):
+    print("Installing source code...")
+    banner("Install Full Build")
+    build_results = run_process(sores, command.full_install)
+    print("main: completed create source install file")
 
 def run_create_install_file(sores, command):
     print("Installing source code...")
@@ -759,9 +901,12 @@ def create_parser():
     parser.add_argument('--fast', action='store_true', help='Use with --fuweb for a fast mode installation with reduced checks.')
     parser.add_argument('--setup', action='store_true', help="Prepare the environment for first-time use.")
     parser.add_argument('--show', action='store_true', help="Display the current configuration and status.")
-    parser.add_argument("--add_rig", action='store_true', help="Add a new rig configuration to the system.")
+    parser.add_argument("--add-rig", action='store_true', help="Add a new rig configuration to "
+                                                               "the system.")
     parser.add_argument('-r', '--rig', action='store', type=str,
         help='Specify the rig identifier for targeted installation.')
+    parser.add_argument("--full-install", action='store_true',
+                        help="Find the latest full build and install it.")
 
     return parser
 
@@ -862,6 +1007,11 @@ def main():
         run_build_source(sores, Commands)
     if args.build_fish:
         run_build_fish(sores, Commands)
+
+    if args.full_install:
+        full_path = run_get_full_install_path(sores, Commands)
+        print("full_path = %s", full_path)
+        run_full_install(rigs, Commands)
 
     if args.install_source:
         run_create_install_file(sores, Commands)
