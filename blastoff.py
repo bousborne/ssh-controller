@@ -422,7 +422,9 @@ class Commands:
         self.cmd_list = [REBOOT_COMMAND]
         self.run_cmd()
 
-    def wait_for_rig_reboot(self, timeout=600, retry_interval=45, max_retries=20, log_callback=None):
+    def wait_for_rig_reboot(self, instance, timeout=600, retry_interval=45, max_retries=20,
+                            log_callback=None):
+        log_callback(f"Waiting for reboot on {instance} with timeout: f{timeout}")
         if log_callback is None:
             log_callback = logging.info
 
@@ -549,7 +551,7 @@ class Commands:
         logging.info(f"returning: {full_path_to_file}")
         return pkg_files[0]
 
-    def full_install(self):
+    def get_full_install_location(self):
         global FULL_BUILD_FILE_NAME, FULL_INSTALL_COMMAND
         logging.info("%s: FULL INSTALL" % self.host)
         logging.info("%s: FULL_BUILD_FILE" % FULL_BUILD_FILE)
@@ -558,20 +560,9 @@ class Commands:
         # full_install_command = FULL_INSTALL_COMMAND + FULL_BUILD_FILE_NAME
         # logging.info("%s: full_install_command" % full_install_command)
         full_file_location = HTTPS_GATE_BASE + FULL_BUILD_FILE_NAME[0]
-        script = (
-            f'script run("maintenance system updates download"); '
-            f'set("url", "{full_file_location}"); '
-            f'run("commit");'
-        )
-        # self.cmd_list = ['maintenance system updates download',
-        #                  'set url=/net/opensores/export/ws/bousborn/on-gate/data/pkg/fish-i386'
-        #                  '-debug/bousbornongate-nas-2024.11.07-12.0x.pkg', 'confirm']
-        # self.cmd_list = [full_install_command]
-        logging.info("%s: script" % script)
-        self.cmd_list = [script]
-        self.run_cmd()
+        return full_file_location
 
-        # awk '{ line = $0 } END { print line }' | awk'{print $1}'
+    def get_latest_install_package(self):
         script = 'script run("top maintenance system updates"); out = run("show"); printf(out);'
         self.cmd_list = [script]
         out = self.run_cmd()
@@ -597,15 +588,104 @@ class Commands:
                 status = parts[-1]
 
                 print(
-                    f"Update: {update_name}, Date: {release_date}, Name: {release_name}, Status: {status}")
+                        f"Update: {update_name}, Date: {release_date}, Name: {release_name}, Status: {status}")
                 if date_version in update_name:
                     selection = update_name
-                    print(f"GOT IT: {update_name}")
+                    print(f"GOT IT: {selection}")
+                    return selection
+
+    def get_matching_install_packages(self, selection):
+        script = 'script run("top maintenance system updates"); out = run("show"); printf(out);'
+        self.cmd_list = [script]
+        out = self.run_cmd()
+        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', out)  # Remove ANSI escape codes
+        clean_output = clean_output.replace('\r\n', '\n')  # Normalize line endings
+
+        # Define the regex pattern for the date-version
+        date_version_pattern = r'(\d{4}\.\d{2}\.\d{2})-(\d+\.\d+)'
+        match = re.search(date_version_pattern, FULL_BUILD_FILE_NAME[0])
+        date = ''
+        version_number = ''
+        date_version = ''
+        if match:
+            date = match.group(1)  # Extract the date
+            version_number = match.group(2).replace('.', '-')  # Format the version
+            date_version = date + ',' + version_number
+
+        # Initialize an empty list to store matching packages
+        matching_packages = []
+
+        for line in clean_output.split('\n')[3:]:  # Skip header lines
+            if line.strip():  # Ensure the line is not empty
+                parts = line.split()  # Split by whitespace
+                update_name = parts[0]
+                release_date = ' '.join(parts[1:3])  # Combine the date and time parts
+                release_name = parts[3] if parts[3] != '-' else "No Name"  # Handle missing names
+                status = parts[-1]
+
+                print(
+                        f"Update: {update_name}, Date: {release_date}, Name: {release_name}, Status: {status}")
+
+                # Check for the string 'bousbornongate' in the package name
+                if selection.split('-')[0] in update_name and status == "previous":
+                    matching_packages.append(update_name)
+                    print(f"Matched: {update_name}")
+
+        return matching_packages
+
+    def destroy_previous_packages(self, packages_to_destroy):
+        for package in packages_to_destroy:
+            print(f"Destroying {package}")
+            script = (
+                f'script run("maintenance system updates"); '
+                f'run("confirm destroy {package}"); '
+            )
+            logging.info("%s: script" % script)
+            self.cmd_list = [script]
+            out = self.run_cmd()
+
+
+
+    def full_install(self):
+        full_file_location = self.get_full_install_location()
+        script = (
+            f'script run("maintenance system updates download"); '
+            f'set("url", "{full_file_location}"); '
+            f'run("commit");'
+        )
+        # self.cmd_list = ['maintenance system updates download',
+        #                  'set url=/net/opensores/export/ws/bousborn/on-gate/data/pkg/fish-i386'
+        #                  '-debug/bousbornongate-nas-2024.11.07-12.0x.pkg', 'confirm']
+        # self.cmd_list = [full_install_command]
+        logging.info("%s: script" % script)
+        self.cmd_list = [script]
+        self.run_cmd()
+
+        # awk '{ line = $0 } END { print line }' | awk'{print $1}'
+        selection = self.get_latest_install_package()
+
+
         # script = (f"script run('top maintenance system updates select {selection}'); out = run('show'); printf(out);")
         script = f"script run('top maintenance system updates select {selection}'); run('confirm upgrade -f')"
 
         self.cmd_list = [script]
         out = self.run_cmd()
+
+        kwargs = {
+            "timeout": 1200,
+            "retry_interval": 120,
+            "max_retries": 50,
+            "log_callback": logging.info
+        }
+
+        # Need to wait until it is rebooted
+        run_process([self], self.wait_for_rig_reboot, **kwargs)
+
+        # Need to go get all previous labeled installs and delete. Prob need a function to wait
+        packages_to_destroy = self.get_matching_install_packages(selection)
+
+        self.destroy_previous_packages(packages_to_destroy)
+
 
     def create_install_file(self):
         logging.info("%s: CREATE INSTALL FILE" % self.host)
