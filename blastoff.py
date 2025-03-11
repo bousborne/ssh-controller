@@ -230,9 +230,20 @@ def create_commands(build_host, build_location, gate_location):
     ]
     HTTPS_GATE_BASE = f"http://{build_host}{build_location}/{gate_location}/data/pkg/fish-i386-debug/"
 
+
+import os
+import pickle
+import getpass
+from cryptography.fernet import Fernet
+
+# Define constants for file paths
+KEY_FILE = "key.key"
+USER_DATA_FILE = "user_data.pkl"
+
+
 def write_key():
     """
-    Generates a key and save it into a file
+    Generates a key and saves it into a file if it does not already exist.
     """
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
@@ -242,98 +253,95 @@ def write_key():
 
 def load_key():
     """
-    Loads the key named `key.key`
+    Loads and returns the encryption key from the file.
     """
-    return open(KEY_FILE, "rb").read()
+    if not os.path.exists(KEY_FILE):
+        raise FileNotFoundError("Key file not found. Please generate a key using write_key().")
+
+    with open(KEY_FILE, "rb") as key_file:
+        return key_file.read()
 
 
 def setup_user_data(cipher_suite):
+    """
+    Prompts the user to input SSH credentials and stores them securely.
+    """
     rigs = {}
 
-    banner("Application Setup")
-    i = 0
+    print("\nApplication Setup")
+    i = 1
     while True:
-        print(f"\nYou are now setting up ssh credentials for appliance #{i}")
-
-        name = input("Enter appliance name (or 'done' to finish): ")
+        print(f"\nSetting up SSH credentials for appliance #{i}")
+        name = input("Enter appliance name (or 'done' to finish): ").strip()
         if name.lower() == 'done':
             break
-        ip_address = input("Enter IP address: ")
-        username = input("Enter username: ")
-        password = getpass.getpass("Enter password: ")
+        ip_address = input("Enter IP address: ").strip()
+        username = input("Enter username: ").strip()
+        password = getpass.getpass("Enter password: ").strip()
         encrypted_password = cipher_suite.encrypt(password.encode())
-        # kerberos_username = input("Enter Kerberos username: ")
-        # kerberos_password = getpass.getpass("Enter Kerberos password: ")
-        # encrypted_kerberos_password = cipher_suite.encrypt(kerberos_password.encode())
+
         rigs[name] = (ip_address, username, encrypted_password)
         i += 1
 
-    print("\nYou are now setting up ssh credentials for your build server")
-    print("Note: script currently only works with keys for build machines.\n")
+    print("\nSetting up SSH credentials for your build server")
+    print("Note: This script currently only supports key-based authentication for build machines.\n")
 
-    host = input("Enter build host address (ex: opensores.us.oracle.com): ")
-    username = input("Enter username for build host: ")
-
-    gate = input("\nEnter gate home on build host \n"
-                 "Example: if your gate is located at /export/ws/username/on-gate,\n"
-                 "then the gate home would be just 'on-gate': ")
+    host = input("Enter build host address (ex: opensores.us.oracle.com): ").strip()
+    username = input("Enter username for build host: ").strip()
+    gate = input("\nEnter gate home on build host (e.g., 'on-gate' from '/export/ws/username/on-gate'): ").strip()
 
     user_data = {'rigs': rigs, 'host': host, 'username': username, 'gate': gate}
 
     with open(USER_DATA_FILE, "wb") as f:
         pickle.dump(user_data, f)
 
-    print("Data saved.")
+    print("Data saved successfully.")
     return user_data
 
 
 def use_user_data(cipher_suite):
-    banner("Confirming appliance info")
+    """
+    Loads and decrypts user data, then displays it.
+    """
+    print("\nConfirming appliance info...")
     try:
         with open(USER_DATA_FILE, "rb") as f:
             user_data = pickle.load(f)
     except (FileNotFoundError, IOError):
         print("Error: User data file not found.")
-        return
-
-    loaded_rigs_dict = user_data['rigs']
+        return None
 
     rigs = {}
-    for name, data in loaded_rigs_dict.items():
-        ip_address, username, encrypted_password = data
-        # ip_address, username, encrypted_password, kerberos_username, encrypted_kerberos_password = data
+    for name, (ip_address, username, encrypted_password) in user_data.get('rigs', {}).items():
         decrypted_password = cipher_suite.decrypt(encrypted_password).decode()
-        # decrypted_kerberos_password = cipher_suite.decrypt(encrypted_kerberos_password).decode()
-        print(f"{name} IP Address: {ip_address}, Username: {username}")
+        print(f"{name}: IP Address = {ip_address}, Username = {username}")
         rigs[name] = (ip_address, username, decrypted_password)
 
-    # Printing the build server information
     print("\nBuild Server Information:")
     print(f"Host: {user_data.get('host', 'Not Set')}")
     print(f"Username: {user_data.get('username', 'Not Set')}")
     print(f"Gate: {user_data.get('gate', 'Not Set')}")
 
     user_data['rigs'] = rigs
-
     return user_data
 
 
 def add_rig_to_user_data(user_data, cipher_suite):
-    name = input("Enter name: ")
-    ip_address = input("Enter IP address: ")
-    username = input("Enter username: ")
-    password = getpass.getpass("Enter password: ")
+    """
+    Adds a new appliance to the stored user data.
+    """
+    name = input("Enter appliance name: ").strip()
+    ip_address = input("Enter IP address: ").strip()
+    username = input("Enter username: ").strip()
+    password = getpass.getpass("Enter password: ").strip()
     encrypted_password = cipher_suite.encrypt(password.encode())
 
-    # Update the existing user data dictionary
-    rigs = user_data.get('rigs', {})
-    rigs[name] = (ip_address, username, encrypted_password)
-    user_data['rigs'] = rigs
+    user_data.setdefault('rigs', {})[name] = (ip_address, username, encrypted_password)
 
     with open(USER_DATA_FILE, "wb") as f:
         pickle.dump(user_data, f)
 
-    print(f"Data for {name} added to the user data.")
+    print(f"Data for {name} added successfully.")
     return user_data
 
 
@@ -952,6 +960,8 @@ def run_reboot_machine(rigs, command):
 
     print("main: finished waiting for reboot on rigs")
 
+import argparse
+
 def create_parser():
     # Descriptive text for the program usage
     description_text = (
@@ -959,11 +969,20 @@ def create_parser():
         'the "fish" shell and associated "source" code on development machines.'
     )
 
-    # Text to display after the argument help
-    epilog_text = 'Execute "blastoff --setup" to configure the tool for initial use.'
+    # Custom examples to display after the argument help
+    epilog_text = (
+        'Examples:\n'
+        '  blastoff --help\n'
+        '  blastoff --fish --rig chutoro\n'
+        '  blastoff --install-fish\n'
+        '  blastoff --setup\n'
+        '  blastoff --fuweb --fast\n'
+        '  blastoff --add-rig --rig myrig\n'
+    )
 
-    # Create the parser with the specified program description and epilog
-    parser = argparse.ArgumentParser(description=description_text, epilog=epilog_text)
+    # Create the parser with the specified program description, epilog (custom examples), and default help formatter
+    parser = argparse.ArgumentParser(description=description_text, epilog=epilog_text,
+                                     formatter_class=argparse.RawTextHelpFormatter)
 
     # Individual actions
     parser.add_argument('--build-source', action='store_true', help='Build the source code only.')
@@ -976,9 +995,11 @@ def create_parser():
     parser.add_argument('--fish', action='store_true', help='Build and install the fish shell.')
 
     # Other options
-    parser.add_argument('--headers', action='store_true', help='Install necessary header files, unrelated to source or fish options.')
+    parser.add_argument('--headers', action='store_true',
+        help='Install necessary header files, unrelated to source or fish options.')
     parser.add_argument('--fuweb', action='store_true', help='Perform the fuweb installation procedure.')
-    parser.add_argument('--fast', action='store_true', help='Use with --fuweb for a fast mode installation with reduced checks.')
+    parser.add_argument('--fast', action='store_true',
+        help='Use with --fuweb for a fast mode installation with reduced checks.')
     parser.add_argument('--setup', action='store_true', help="Prepare the environment for first-time use.")
     parser.add_argument('--show', action='store_true', help="Display the current configuration and status.")
     parser.add_argument("--add-rig", action='store_true', help="Add a new rig configuration to "
