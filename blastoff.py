@@ -123,7 +123,7 @@ import getpass
 import os
 import pickle
 import re
-
+import ast
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1004,7 +1004,7 @@ def create_parser():
     parser.add_argument('--show', action='store_true', help="Display the current configuration and status.")
     parser.add_argument("--add-rig", action='store_true', help="Add a new rig configuration to "
                                                                "the system.")
-    parser.add_argument('-r', '--rig', action='store', type=str,
+    parser.add_argument('-r', '--rig', nargs='*', action='store', type=str,
         help='Specify the rig identifier for targeted installation.')
     parser.add_argument("--full-install", action='store_true',
                         help="Find the latest full build and install it.")
@@ -1083,16 +1083,58 @@ def main():
     print("Host:", user_data['host'])
     print("Username:", user_data['username'])
 
-    rigs = []
-    if args.rig:
-        if args.rig in rigs_dict:
-            rig = rigs_dict[args.rig]
-            commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
-            rigs.append(commands_instance)
+    # Normalize rigs
+    rigs = args.rig
+    rigs_list = []
+    if rigs:
+        # If it's a list with a single item that *looks like* a list (string starting with "["), parse it
+        if len(rigs) == 1 and rigs[0].startswith('['):
+            try:
+                # Safely evaluate the list string (e.g., "[chutoro, nori]")
+                rigs_list = ast.literal_eval(rigs[0])
+                if isinstance(rigs, str):
+                    rigs_list = [rigs]
+            except Exception:
+                raise ValueError(f"Invalid --rigs format: {rigs[0]}")
+        else:
+            # If it's a comma-separated string, split it
+            if len(rigs) == 1 and ',' in rigs[0]:
+                rigs_list = [r.strip() for r in rigs[0].split(',')]
+            elif ',' not in rigs[0] and ' ' in rigs[0]:
+                rigs_list = [r.strip() for r in rigs[0].split(' ')]
+            elif ',' not in rigs[0]:
+                rigs_list = rigs
     else:
-        for rig in rigs_dict.values():
-            commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
+        rigs_list = rigs
+    # Build the Commands list
+    rigs = []
+
+    if rigs_list:
+        for rig_name in rigs_list:
+            if rig_name in rigs_dict:
+                rig_info = rigs_dict[rig_name]
+                commands_instance = Commands(host=rig_info[0], username=rig_info[1], password=rig_info[2])
+                rigs.append(commands_instance)
+            else:
+                print(f"Warning: Rig '{rig_name}' not found in rigs_dict!")
+    else:
+        # No rigs specified → build Commands for all rigs
+        for rig_info in rigs_dict.values():
+            commands_instance = Commands(host=rig_info[0], username=rig_info[1], password=rig_info[2])
             rigs.append(commands_instance)
+
+    # rigs = []
+    # if args.rig:
+    #     for rig in args.rig:
+    #         print("install on %s", rig)
+    #         if args.rig in rigs_dict:
+    #             rig = rigs_dict[args.rig]
+    #             commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
+    #             rigs.append(commands_instance)
+    #     else:
+    #         for rig in rigs_dict.values():
+    #             commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
+    #             rigs.append(commands_instance)
 
     banner("Setup Sores Instance")
     sores = []
