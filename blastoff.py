@@ -1100,6 +1100,8 @@ def main():
             # If it's a comma-separated string, split it
             if len(rigs) == 1 and ',' in rigs[0]:
                 rigs_list = [r.strip() for r in rigs[0].split(',')]
+            elif ',' in rigs[0]:
+                rigs_list = [r.strip().replace(',', '') for r in rigs if r.strip()]
             elif ',' not in rigs[0] and ' ' in rigs[0]:
                 rigs_list = [r.strip() for r in rigs[0].split(' ')]
             elif ',' not in rigs[0]:
@@ -1122,19 +1124,6 @@ def main():
         for rig_info in rigs_dict.values():
             commands_instance = Commands(host=rig_info[0], username=rig_info[1], password=rig_info[2])
             rigs.append(commands_instance)
-
-    # rigs = []
-    # if args.rig:
-    #     for rig in args.rig:
-    #         print("install on %s", rig)
-    #         if args.rig in rigs_dict:
-    #             rig = rigs_dict[args.rig]
-    #             commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
-    #             rigs.append(commands_instance)
-    #     else:
-    #         for rig in rigs_dict.values():
-    #             commands_instance = Commands(host=rig[0], username=rig[1], password=rig[2])
-    #             rigs.append(commands_instance)
 
     banner("Setup Sores Instance")
     sores = []
